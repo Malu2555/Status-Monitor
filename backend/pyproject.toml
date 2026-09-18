@@ -1,0 +1,11 @@
+# Backend linting config (ruff).
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+exclude = ["*/migrations/*", "*/.venv/*"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF"]
+# RUF012 (mutable class-attribute defaults) is idiomatic Django
+# (Meta.ordering lists, TextChoices structures) — no value here.
+ignore = ["RUF012"]

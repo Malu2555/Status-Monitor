@@ -1,0 +1,6 @@
+# Linux cron: run due monitor checks every minute.
+# The command itself respects each monitor's own check interval,
+# so this single cron line covers all monitors and tiers.
+#
+#   crontab -e   →   add:
+# * * * * * cd /path/to/Status_Monitor/backend && /path/to/.venv/bin/python manage.py run_checks >> /var/log/status_monitor_checks.log 2>&1
