@@ -7,6 +7,9 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from django.conf import settings
+from django.utils import timezone
+
+from audit.services import audit_log
 
 if TYPE_CHECKING:  # import-time only (avoids a circular import with accounts)
     from .models import Subscription
@@ -141,7 +144,43 @@ def _ts_to_dt(timestamp):
 
 
 def handle_webhook_event(event: dict) -> None:
-    """Sync a verified Stripe event into Subscription rows."""
+    """Sync a verified Stripe event into Subscription rows, idempotently.
+
+    Stripe delivers webhooks at-least-once, so each event id is claimed in a
+    StripeEvent row (inside a transaction, FOR UPDATE) before applying;
+    duplicate deliveries of an already-processed id are skipped.
+    """
+    from django.db import transaction
+
+    event_id = event.get("id") or ""
+    if not event_id:
+        logger.warning("stripe webhook: event without id — applying without idempotency")
+        _apply_event(event)
+        return
+
+    from .models import StripeEvent
+
+    with transaction.atomic():
+        stripe_event, created = StripeEvent.objects.select_for_update().get_or_create(
+            id=event_id, defaults={"type": event.get("type", ""), "payload": event}
+        )
+        if not created and stripe_event.processed_at is not None:
+            logger.info("webhook %s: duplicate delivery skipped", event_id)
+            return
+        _apply_event(event)
+        audit_log(
+            None,
+            "billing.webhook_processed",
+            user=None,
+            event_id=event_id,
+            event_type=event.get("type", ""),
+        )
+        stripe_event.processed_at = timezone.now()
+        stripe_event.save(update_fields=["processed_at"])
+
+
+def _apply_event(event: dict) -> None:
+    """Apply a verified Stripe event to Subscription rows (no idempotency)."""
     from .models import Subscription
 
     event_type = event.get("type", "")

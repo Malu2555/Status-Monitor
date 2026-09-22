@@ -19,6 +19,15 @@ node_modules/
 frontend/dist/
 *.log
 
+# Generated artifacts (rebuild via `manage.py export_openapi` + `npm run api:gen`).
+backend/openapi.json
+frontend/src/api/types.ts
+
+# SQLite runtime files (the .sqlite3 base is already ignored below).
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+
 # IDE / OS
 .vscode/
 .idea/

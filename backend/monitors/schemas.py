@@ -51,7 +51,26 @@ class PublicMonitorOut(Schema):
 
 class PublicMonitorDetailOut(PublicMonitorOut):
     uptime_7d: float | None = None
+    uptime_30d: float | None = None
+    incidents: list["IncidentOut"] = []
     series: list["BucketOut"] = []
+
+
+class IncidentOut(Schema):
+    id: int
+    started_at: datetime
+    ended_at: datetime | None = None
+    checks_down: int
+    last_status_code: int | None = None
+
+
+class MaintenanceOut(Schema):
+    id: int
+    monitor_id: int
+    monitor_name: str
+    starts_at: datetime
+    ends_at: datetime
+    note: str
 
 
 class BucketOut(Schema):

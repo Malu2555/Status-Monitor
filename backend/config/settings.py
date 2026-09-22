@@ -3,11 +3,14 @@ Django settings for the Status Monitor project.
 
 All secrets and configuration come from environment variables (.env file).
 """
+import logging
 import os
 import sys
+import urllib.parse
 from datetime import timedelta
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -34,8 +37,14 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "corsheaders",
     "accounts",
+    "django_otp",
+    "django_otp.plugins.otp_totp",
     "monitors",
     "billing",
+    "health",
+    "audit",
+    "notifications",
+    "config",  # project package: hosts the export_openapi management command
 ]
 
 MIDDLEWARE = [
@@ -72,19 +81,77 @@ WSGI_APPLICATION = "config.wsgi.application"
 # --------------------------------------------------------------------------
 # Database + cache (cache backs django-ninja throttling)
 # --------------------------------------------------------------------------
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
-    }
-}
+# Development defaults to SQLite + in-memory cache (zero configuration).
+# In production set DATABASE_URL to a PostgreSQL DSN; the shared cache then
+# rides on the same server, so every worker/instance stays in sync. To move
+# the cache to Redis later, change only the CACHES block (+ `pip install
+# redis`) — nothing else touches the cache backend directly.
+#   DATABASE_URL=postgres://user:password@host:5432/dbname
+#   DB_CONN_MAX_AGE=60   # persistent DB connections in seconds (default 60)
+_DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        "LOCATION": "status-monitor",
+if _DATABASE_URL:
+    _parsed_url = urllib.parse.urlparse(_DATABASE_URL)
+    if _parsed_url.scheme not in ("postgres", "postgresql") or not _parsed_url.path.strip("/"):
+        raise ImproperlyConfigured(
+            "DATABASE_URL must be a PostgreSQL DSN with a database name, e.g. "
+            "postgres://user:password@host:5432/dbname"
+        )
+    _query = urllib.parse.parse_qs(_parsed_url.query)
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": urllib.parse.unquote(_parsed_url.path.lstrip("/")),
+            "USER": urllib.parse.unquote(_parsed_url.username or ""),
+            "PASSWORD": urllib.parse.unquote(_parsed_url.password or ""),
+            "HOST": _parsed_url.hostname or "",
+            "PORT": str(_parsed_url.port or ""),
+            # Persistent connections across requests; stale ones get re-tested.
+            "CONN_MAX_AGE": int(os.environ.get("DB_CONN_MAX_AGE", "60")),
+            "CONN_HEALTH_CHECKS": True,
+            # Allow e.g. ?sslmode=require in the DSN (managed PG providers).
+            "OPTIONS": {"sslmode": _query["sslmode"][0]} if "sslmode" in _query else {},
+        }
     }
-}
+    CACHES = {
+        "default": {
+            # Shared across workers/instances via PostgreSQL — create the table
+            # with `manage.py createcachetable` (idempotent) after migrating.
+            "BACKEND": "django.core.cache.backends.db.DatabaseCache",
+            "LOCATION": "django_cache",
+            # Bound table growth: oldest entries are culled probabilistically.
+            "OPTIONS": {"MAX_ENTRIES": 1000},
+        }
+    }
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    }
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "status-monitor",
+        }
+    }
+    if not DEBUG:
+        # WARNING+ reaches the root handler even before logging config loads,
+        # so a forgotten DATABASE_URL in production is loud instead of silent.
+        logging.getLogger("config").warning(
+            "DATABASE_URL is not set while DEBUG=False — running on SQLite with the "
+            "in-memory cache. Set DATABASE_URL to a PostgreSQL DSN for production."
+        )
+
+
+def _db_endpoint(db_config: dict) -> str:
+    """Credential-free summary of a database config for the startup log."""
+    if db_config["ENGINE"] == "django.db.backends.postgresql":
+        host = db_config.get("HOST") or "localhost"
+        port = f":{db_config['PORT']}" if db_config.get("PORT") else ""
+        return f"postgresql {host}{port}/{db_config['NAME']}"
+    return f"sqlite3 {db_config['NAME']}"
 
 # --------------------------------------------------------------------------
 # Auth / JWT
@@ -100,6 +167,10 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # JWT (HS256; signed with SECRET_KEY unless a dedicated key is provided)
 JWT_SIGNING_KEY = os.environ.get("JWT_SIGNING_KEY", "") or SECRET_KEY
+
+# Account lifecycle token lifetimes (verification link / password-reset link)
+VERIFY_EMAIL_TOKEN_TTL = timedelta(hours=int(os.environ.get("VERIFY_EMAIL_TOKEN_TTL_HOURS", "24")))
+PASSWORD_RESET_TOKEN_TTL = timedelta(hours=int(os.environ.get("PASSWORD_RESET_TOKEN_TTL_HOURS", "1")))
 ACCESS_TOKEN_LIFETIME = timedelta(minutes=int(os.environ.get("ACCESS_TOKEN_MINUTES", "15")))
 REFRESH_TOKEN_LIFETIME = timedelta(days=int(os.environ.get("REFRESH_TOKEN_DAYS", "7")))
 
@@ -166,8 +237,61 @@ LOGGING = {
         "accounts": {"handlers": ["console"], "level": "INFO", "propagate": False},
         "monitors": {"handlers": ["console"], "level": "INFO", "propagate": False},
         "billing": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "health": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "audit": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "notifications": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "config": {"handlers": ["console"], "level": "INFO", "propagate": False},
     },
 }
+
+
+def _configure_logging(logging_settings: dict) -> None:
+    """dictConfig, then log which database/cache backends were selected.
+
+    Used as LOGGING_CONFIG so the summary is emitted after logging is wired
+    up — settings import runs before Django configures logging, so an INFO
+    line logged at import time would be dropped. The summary never includes
+    the DSN (credentials): only the engine, host, port and database name.
+    (Django 6.1 passes the LOGGING dict as a positional argument.)
+    """
+    from logging.config import dictConfig
+
+    dictConfig(logging_settings)
+    logging.getLogger("config").info(
+        "startup: database=%s cache=%s sentry=%s",
+        _db_endpoint(DATABASES["default"]),
+        CACHES["default"]["BACKEND"],
+        "enabled" if os.environ.get("SENTRY_DSN") else "disabled",
+    )
+
+
+LOGGING_CONFIG = "config.settings._configure_logging"
+
+# --------------------------------------------------------------------------
+# Email — console backend for dev; wire a real provider (SMTP/SES/…) when
+# the account-lifecycle milestone lands (see .env.example).
+# --------------------------------------------------------------------------
+EMAIL_BACKEND = os.environ.get(
+    "EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend"
+)
+DEFAULT_FROM_EMAIL = os.environ.get(
+    "DEFAULT_FROM_EMAIL", "Status Monitor <noreply@localhost>"
+)
+
+# --------------------------------------------------------------------------
+# Error reporting — Sentry stays a no-op unless SENTRY_DSN is provided.
+# --------------------------------------------------------------------------
+if os.environ.get("SENTRY_DSN"):
+    import sentry_sdk
+    from sentry_sdk.integrations.django import DjangoIntegration
+
+    sentry_sdk.init(
+        dsn=os.environ["SENTRY_DSN"],
+        integrations=[DjangoIntegration()],
+        environment="dev" if DEBUG else "prod",
+        traces_sample_rate=0.0,  # leave performance tracing off for now
+        send_default_pii=False,
+    )
 
 # --------------------------------------------------------------------------
 # Internationalization / static

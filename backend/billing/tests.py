@@ -1,9 +1,15 @@
-from django.test import TestCase
 from typing import Any, cast
 
+from django.test import TestCase
+
 from accounts.models import User
-from billing.models import Subscription
-from billing.services import can_add_monitor, get_plan_summary, monitors_limit
+from billing.models import StripeEvent, Subscription
+from billing.services import (
+    can_add_monitor,
+    get_plan_summary,
+    handle_webhook_event,
+    monitors_limit,
+)
 
 
 class BillingLogicTests(TestCase):
@@ -38,3 +44,72 @@ class BillingLogicTests(TestCase):
         ok, reason = can_add_monitor(self.user)
         self.assertFalse(ok)
         self.assertIn("limit", reason.lower())
+
+
+class WebhookIdempotencyTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user("hookuser", "hook@example.com", "password123")
+
+    def _checkout_event(self, event_id="evt_dup", plan="pro"):
+        return {
+            "id": event_id,
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "customer": "cus_123",
+                    "subscription": "sub_123",
+                    "metadata": {"user_id": str(self.user.pk), "plan": plan},
+                    "current_period_end": 2000000000,
+                }
+            },
+        }
+
+    def test_duplicate_delivery_processed_once(self):
+        handle_webhook_event(self._checkout_event())
+        # A Stripe replay may carry a different payload; it must be ignored.
+        handle_webhook_event(self._checkout_event(plan="business"))
+        subscription = Subscription.objects.get(user=self.user)
+        self.assertEqual(subscription.plan, "pro")
+        self.assertEqual(StripeEvent.objects.count(), 1)
+        self.assertIsNotNone(StripeEvent.objects.get(id="evt_dup").processed_at)
+
+    def test_distinct_events_both_processed(self):
+        handle_webhook_event(self._checkout_event(event_id="evt_1", plan="pro"))
+        handle_webhook_event(self._checkout_event(event_id="evt_2", plan="business"))
+        subscription = Subscription.objects.get(user=self.user)
+        self.assertEqual(subscription.plan, "business")
+        self.assertEqual(StripeEvent.objects.count(), 2)
+
+    def test_event_without_id_still_applied(self):
+        handle_webhook_event(self._checkout_event(event_id=""))
+        self.assertTrue(Subscription.objects.filter(user=self.user).exists())
+
+    def test_subscription_updated_applied(self):
+        Subscription.objects.create(
+            user=self.user,
+            plan="pro",
+            status="active",
+            stripe_subscription_id="sub_99",
+        )
+        handle_webhook_event(
+            {
+                "id": "evt_upd",
+                "type": "customer.subscription.updated",
+                "data": {"object": {"id": "sub_99", "status": "canceled"}},
+            }
+        )
+        subscription = Subscription.objects.get(user=self.user)
+        self.assertEqual(subscription.status, Subscription.Status.CANCELED)
+        self.assertEqual(subscription.plan, "free")
+
+    def test_webhook_processed_audit_once(self):
+        handle_webhook_event(self._checkout_event())
+        handle_webhook_event(self._checkout_event(plan="business"))
+        from audit.models import AuditLogEntry
+
+        self.assertEqual(
+            AuditLogEntry.objects.filter(
+                kind="billing.webhook_processed", payload__event_id="evt_dup"
+            ).count(),
+            1,
+        )

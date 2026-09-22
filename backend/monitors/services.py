@@ -9,10 +9,10 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 from django.conf import settings
-from django.db.models import Count, Q
+from django.db.models import Count, F, Q
 from django.utils import timezone
 
-from .models import Check, Monitor
+from .models import Check, Incident, MaintenanceWindow, Monitor
 
 logger = logging.getLogger("monitors")
 
@@ -87,6 +87,7 @@ def run_check(monitor: Monitor) -> dict:
         is_up = False
 
     response_ms = int((time.monotonic() - started) * 1000)
+    previous_status = monitor.last_status
     Check.objects.create(
         monitor=monitor,
         is_up=is_up,
@@ -116,6 +117,33 @@ def run_check(monitor: Monitor) -> dict:
         response_ms,
         error[:80],
     )
+    now = timezone.now()
+    if previous_status != monitor.last_status:
+        # Track outage windows: open on down transition, close on recovery.
+        if monitor.last_status == Monitor.Status.DOWN:
+            Incident.objects.create(
+                monitor=monitor, started_at=now, last_status_code=status_code
+            )
+        else:
+            Incident.objects.filter(monitor=monitor, ended_at=None).update(ended_at=now)
+        if monitor.last_status == Monitor.Status.DOWN and MaintenanceWindow.objects.filter(
+            monitor=monitor, starts_at__lte=now, ends_at__gte=now
+        ).exists():
+            logger.info("check: monitor=%s down during maintenance — alert suppressed", monitor.pk)
+        else:
+            from notifications.services import enqueue_state_transition
+
+            enqueue_state_transition(
+                monitor,
+                previous_status,
+                monitor.last_status,
+                {"status_code": status_code, "response_ms": response_ms, "error": error},
+            )
+    elif not is_up:
+        # Still down (no status change): keep the open incident current.
+        Incident.objects.filter(monitor=monitor, ended_at=None).update(
+            checks_down=F("checks_down") + 1, last_status_code=status_code
+        )
     return {"is_up": is_up, "status_code": status_code, "response_ms": response_ms, "error": error}
 
 

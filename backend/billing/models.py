@@ -27,3 +27,22 @@ class Subscription(models.Model):
 
     def __str__(self):
         return f"{self.user} — {self.plan} ({self.status})"
+
+
+class StripeEvent(models.Model):
+    """Verified Stripe webhook event; makes webhook processing idempotent.
+
+    Stripe redelivers webhooks until they return 2xx, so the same event may
+    arrive more than once. ``processed_at`` marks the moment the event's
+    effects were applied; duplicate deliveries are skipped.
+    """
+
+    id = models.CharField(primary_key=True, max_length=64)  # Stripe event id ("evt_…")
+    type = models.CharField(max_length=128)
+    payload = models.JSONField(default=dict)
+    processed_at = models.DateTimeField(null=True, blank=True)
+    received_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        state = "processed" if self.processed_at else "pending"
+        return f"{self.id} ({self.type}, {state})"

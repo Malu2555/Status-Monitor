@@ -1,0 +1,44 @@
+services:
+  web:
+    build: .
+    env_file:
+      - backend/.env
+    environment:
+      # In production leave DATABASE_URL OUT of .env and inject it here.
+      DATABASE_URL: ${DATABASE_URL:-}
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  # Minute-granular scheduler: monitor checks + notification delivery.
+  cron:
+    build: .
+    env_file:
+      - backend/.env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-}
+    restart: unless-stopped
+    command: >
+      sh -c "while true; do
+        python manage.py run_checks;
+        python manage.py deliver_notifications;
+        sleep 60;
+      done"
+
+  # Optional local Postgres for testing the production path.
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: statusmonitor
+      POSTGRES_PASSWORD: statusmonitor
+      POSTGRES_DB: statusmonitor
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U statusmonitor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

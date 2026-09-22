@@ -6,9 +6,10 @@ from datetime import UTC, datetime
 
 import jwt
 from django.conf import settings
+from django.core.mail import send_mail
 from django.utils import timezone as dj_timezone
 
-from .models import RevokedRefreshToken
+from .models import AccountActionToken, RevokedRefreshToken
 
 ALGORITHM = "HS256"
 
@@ -82,6 +83,8 @@ def user_dict(user) -> dict:
         "id": user.pk,
         "username": user.username,
         "email": user.email,
+        "email_verified": user.email_verified,
+        "otp_enabled": user_otp_enabled(user),
         "plan": info["plan"],
         "plan_label": info["label"],
         "monitors_used": info["monitors_used"],
@@ -159,3 +162,107 @@ def is_refresh_revoked(token: str) -> bool:
 
 def prune_blacklist() -> None:
     RevokedRefreshToken.objects.filter(expires_at__lt=dj_timezone.now()).delete()
+
+
+# --------------------------------------------------------------------------
+# Account lifecycle: verification + password reset tokens
+# --------------------------------------------------------------------------
+def issue_account_token(user, purpose: str) -> AccountActionToken:
+    """Create a single-use token; supersedes any unspent token of the same purpose."""
+    ttl = (
+        settings.VERIFY_EMAIL_TOKEN_TTL
+        if purpose == "verify_email"
+        else settings.PASSWORD_RESET_TOKEN_TTL
+    )
+    AccountActionToken.objects.filter(user=user, purpose=purpose, consumed_at=None).delete()
+    return AccountActionToken.objects.create(
+        id=secrets.token_urlsafe(32),
+        user=user,
+        purpose=purpose,
+        expires_at=dj_timezone.now() + ttl,
+    )
+
+
+def consume_account_token(token_id: str, purpose: str):
+    """Redeem a token; returns the owning user or None when invalid/expired/used."""
+    try:
+        token = AccountActionToken.objects.select_related("user").get(
+            id=token_id,
+            purpose=purpose,
+            consumed_at=None,
+            expires_at__gt=dj_timezone.now(),
+        )
+    except AccountActionToken.DoesNotExist:
+        return None
+    token.consumed_at = dj_timezone.now()
+    token.save(update_fields=["consumed_at"])
+    return token.user
+
+
+def send_verification_email(user) -> None:
+    token = issue_account_token(user, "verify_email")
+    link = f"{settings.FRONTEND_URL}/verify-email?token={token.id}"
+    send_mail(
+        "Verify your Status Monitor account",
+        f"Hi {user.username},\n\nConfirm your email address:\n{link}\n\n"
+        "This link expires in 24 hours. If you didn't create an account, "
+        "you can ignore this email.",
+        settings.DEFAULT_FROM_EMAIL,
+        [user.email],
+        fail_silently=False,
+    )
+
+
+def send_password_reset_email(user) -> None:
+    token = issue_account_token(user, "password_reset")
+    link = f"{settings.FRONTEND_URL}/reset-password?token={token.id}"
+    send_mail(
+        "Reset your Status Monitor password",
+        f"Hi {user.username},\n\nReset your password here:\n{link}\n\n"
+        "This link expires in 1 hour. If you didn't request this reset, "
+        "you can ignore this email.",
+        settings.DEFAULT_FROM_EMAIL,
+        [user.email],
+        fail_silently=False,
+    )
+
+
+# --------------------------------------------------------------------------
+# Two-factor authentication (opt-in TOTP via django-otp)
+# --------------------------------------------------------------------------
+def user_otp_enabled(user) -> bool:
+    from django_otp.plugins.otp_totp.models import TOTPDevice
+
+    return TOTPDevice.objects.filter(user=user, confirmed=True).exists()
+
+
+def verify_otp_code(user, code: str) -> bool:
+    if not code:
+        return False
+    from django_otp import match_token
+
+    try:
+        return match_token(user, code) is not None
+    except Exception:
+        return False
+
+
+def create_totp_device(user):
+    from django_otp.plugins.otp_totp.models import TOTPDevice
+
+    device, _ = TOTPDevice.objects.get_or_create(
+        user=user, name="default", defaults={"confirmed": False}
+    )
+    return device
+
+
+def confirm_totp_device(user, code: str) -> bool:
+    """Validate a code against the *unconfirmed* device and flip it to confirmed."""
+    from django_otp.plugins.otp_totp.models import TOTPDevice
+
+    device = TOTPDevice.objects.filter(user=user, name="default", confirmed=False).first()
+    if device is None or not device.verify_token(code):
+        return False
+    device.confirmed = True
+    device.save(update_fields=["confirmed"])
+    return True

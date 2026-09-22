@@ -13,6 +13,7 @@ from ninja import Router
 from ninja.errors import HttpError
 
 from accounts.auth import AuthBearer
+from audit.services import audit_log
 from config.throttling import MonitorAuthThrottle, PublicAnonThrottle, SessionAuthThrottle
 
 from . import services as billing
@@ -32,6 +33,9 @@ logger = logging.getLogger("billing")
 )
 def checkout(request, payload: CheckoutIn):
     logger.info("checkout session requested: user=%s plan=%s", request.auth.username, payload.plan)
+    audit_log(request, "billing.checkout_requested", user=request.auth, plan=payload.plan)
+    if not request.auth.email_verified:
+        raise HttpError(403, "Verify your email address before upgrading.")
     try:
         url = billing.create_checkout_session(request.auth, payload.plan)
     except billing.StripeNotConfigured as exc:
@@ -50,6 +54,7 @@ def checkout(request, payload: CheckoutIn):
 )
 def portal(request):
     logger.info("billing portal requested: user=%s", request.auth.username)
+    audit_log(request, "billing.portal_requested", user=request.auth)
     try:
         url = billing.create_portal_session(request.auth)
     except billing.StripeNotConfigured as exc:

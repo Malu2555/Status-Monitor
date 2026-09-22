@@ -85,8 +85,23 @@ cd backend
 - Set `DEBUG=False`, `ALLOWED_HOSTS`, `COOKIE_SECURE=True` and
   `SECURE_SSL_REDIRECT=True` in `.env` behind HTTPS (HSTS etc. enabled
   automatically), serve the built `frontend/dist` from the same origin.
-- The dev LocMemCache should be replaced with Redis/memcached when running
-  multiple workers (rate-limit buckets are cache-backed).
+- Set `DATABASE_URL` (PostgreSQL DSN, e.g.
+  `postgres://user:password@host:5432/statusmonitor`) to switch from the dev
+  SQLite + LocMemCache to PostgreSQL + a database-backed cache. On first
+  deploy run `.venv\Scripts\python manage.py migrate` **and**
+  `.venv\Scripts\python manage.py createcachetable` — rate-limit buckets
+  then stay global across all workers/instances.
+- To move the cache to Redis later: `pip install redis`, run a Redis server,
+  and switch `CACHES["default"]["BACKEND"]` to
+  `django.core.cache.backends.redis.RedisCache` (with a redis:// `LOCATION`).
+  Everything using the cache (throttling) keeps working — no code changes.
+- `GET /api/health` is an unauthenticated liveness probe (DB + cache) for
+  load balancers / k8s — 200 with a JSON body when healthy, 503 otherwise.
+- Stripe webhooks are idempotent (see the `StripeEvent` ledger in the
+  Django admin). Downtime alerts flow through an outbox: schedule
+  `manage.py deliver_notifications` every minute next to `run_checks`, and
+  manage channels via the admin. Security/billing actions land in the
+  read-only `AuditLogEntry` admin view.
 - Check intervals are minute-granular by design (cron). Sub-minute checks
   would need a persistent worker (Celery/Django-Q2) — the check logic in
   `monitors/services.run_check` is already worker-ready.

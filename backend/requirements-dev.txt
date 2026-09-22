@@ -1,0 +1,5 @@
+# Development-only tooling — install alongside the runtime requirements:
+#   .venv\Scripts\pip install -r requirements.txt -r requirements-dev.txt
+pip-audit>=2.6      # scans the installed environment for known vulnerabilities
+ruff>=0.6           # linter/formatter configured in pyproject.toml
+pyright>=1.1.390    # type checker (same engine as Pylance; CI parity)
