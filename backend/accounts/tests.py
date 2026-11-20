@@ -8,7 +8,15 @@ class AuthFlowTests(TestCase):
     def _register(self, username="alice", email="alice@example.com", password="Str0ng-Pass!"):
         return self.client.post(
             "/api/auth/register",
-            data=json.dumps({"username": username, "email": email, "password": password}),
+            data=json.dumps(
+                {
+                    "username": username,
+                    "email": email,
+                    "password": password,
+                    "accepted_tos": True,
+                    "accepted_age": True,
+                }
+            ),
             content_type="application/json",
         )
 

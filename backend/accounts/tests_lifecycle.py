@@ -14,6 +14,8 @@ class VerificationTests(TestCase):
             "username": "alice",
             "email": "alice@example.com",
             "password": "Str0ng-Pass!",
+            "accepted_tos": True,
+            "accepted_age": True,
             **overrides,
         }
         return self.client.post(

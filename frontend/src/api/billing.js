@@ -1,4 +1,4 @@
-// Billing endpoints: Stripe checkout, customer portal, plan summary.
+// Billing endpoints: Polar checkout, customer portal, plan summary.
 
 import { apiFetch } from './client'
 

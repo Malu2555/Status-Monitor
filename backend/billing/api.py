@@ -1,12 +1,13 @@
-"""Stripe billing endpoints: checkout, customer portal, verified webhook.
+"""Polar.sh billing endpoints: checkout, customer portal, verified webhook.
 
-HTTP status codes: 200 OK · 400 unknown plan / missing price / no customer ·
-401 missing/invalid access token · 503 Stripe not configured.
-Webhook: 200 received · 400 invalid payload/signature · 503 not configured.
+HTTP status codes: 200 OK · 400 unknown plan / missing product / no customer ·
+401 missing/invalid access token · 403 email not verified · 503 Polar not
+configured. Webhook: 200 received · 400 invalid payload/signature · 503 not
+configured.
 """
+import json
 import logging
 
-import stripe
 from django.conf import settings
 from django.http import HttpResponse
 from ninja import Router
@@ -38,7 +39,7 @@ def checkout(request, payload: CheckoutIn):
         raise HttpError(403, "Verify your email address before upgrading.")
     try:
         url = billing.create_checkout_session(request.auth, payload.plan)
-    except billing.StripeNotConfigured as exc:
+    except billing.PolarNotConfigured as exc:
         raise HttpError(503, str(exc)) from exc
     except ValueError as exc:
         raise HttpError(400, str(exc)) from exc
@@ -57,7 +58,7 @@ def portal(request):
     audit_log(request, "billing.portal_requested", user=request.auth)
     try:
         url = billing.create_portal_session(request.auth)
-    except billing.StripeNotConfigured as exc:
+    except billing.PolarNotConfigured as exc:
         raise HttpError(503, str(exc)) from exc
     except ValueError as exc:
         raise HttpError(400, str(exc)) from exc
@@ -75,24 +76,28 @@ def summary(request):
     return billing.get_plan_summary(request.auth)
 
 
-@router.post("/webhook", auth=None, throttle=[PublicAnonThrottle("30/m")], url_name="stripe_webhook")
+@router.post(
+    "/webhook",
+    auth=None,
+    throttle=[PublicAnonThrottle("30/m")],
+    url_name="billing_webhook",
+)
 def webhook(request):
-    if not settings.STRIPE_SECRET_KEY or not settings.STRIPE_WEBHOOK_SECRET:
-        return HttpResponse("Stripe webhook verification is not configured.", status=503)
-    signature = request.headers.get("Stripe-Signature", "")
+    if not settings.POLAR_WEBHOOK_SECRET:
+        return HttpResponse("Webhook verification is not configured.", status=503)
     try:
-        event = stripe.Webhook.construct_event(
-            request.body, signature, settings.STRIPE_WEBHOOK_SECRET
-        )
-    except ValueError:
-        logger.warning("stripe webhook: unreadable payload")
-        return HttpResponse("Invalid payload.", status=400)
-    except stripe.SignatureVerificationError:
-        logger.warning("stripe webhook: signature verification failed")
+        billing.verify_signature(request.body, request.headers)
+    except billing.SignatureError:
+        logger.warning("polar webhook: signature verification failed")
         return HttpResponse("Invalid signature.", status=400)
-    # stripe v15: construct_event returns a stripe.Event (StripeObject, not a dict),
-    # so convert it to plain dicts before the dict-based handler uses it.
-    event_dict = event.to_dict()
-    logger.info("stripe webhook: type=%s id=%s", event_dict["type"], event_dict.get("id"))
-    billing.handle_webhook_event(event_dict)
+    except billing.PolarNotConfigured as exc:
+        return HttpResponse(str(exc), status=503)
+    try:
+        event = json.loads(request.body)
+    except (ValueError, TypeError):
+        logger.warning("polar webhook: unreadable payload")
+        return HttpResponse("Invalid payload.", status=400)
+    delivery_id = request.headers.get("webhook-id", "")
+    logger.info("polar webhook: type=%s id=%s", event.get("type"), delivery_id)
+    billing.handle_webhook_event(event, delivery_id)
     return HttpResponse("received")

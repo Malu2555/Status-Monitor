@@ -11,6 +11,7 @@ from typing import cast
 from django.conf import settings
 from django.contrib.auth import authenticate
 from django.http import JsonResponse
+from django.utils import timezone
 from ninja import Router
 from ninja.errors import HttpError
 from ninja.throttling import BaseThrottle
@@ -18,14 +19,22 @@ from ninja.throttling import BaseThrottle
 from audit.services import audit_log
 from config.throttling import AuthAnonThrottle, SessionAuthThrottle
 
+from . import abuse
 from . import services as auth_services
 from .auth import AuthBearer
 from .models import User
 from .schemas import (
+    ApiTokenCreatedOut,
+    ApiTokenIn,
+    ApiTokenOut,
     LoginIn,
     MessageOut,
+    ModerationIn,
+    ModerationOut,
+    OtpActivatedOut,
     OtpCodeIn,
     OtpEnrollOut,
+    RecoveryCodesSummaryOut,
     RegisterIn,
     RequestResetIn,
     ResetConfirmIn,
@@ -40,8 +49,8 @@ logger = logging.getLogger("accounts")
 
 
 def _client_ip(request) -> str:
-    """Best-effort client IP for audit logs (respects X-Forwarded-For)."""
-    return request.META.get("HTTP_X_FORWARDED_FOR", request.META.get("REMOTE_ADDR", ""))
+    """Best-effort client IP for audit logs (trusted X-Forwarded-For only)."""
+    return abuse.client_ip(request)
 
 AUTH_THROTTLE: list[BaseThrottle] = [AuthAnonThrottle("5/m")]
 
@@ -59,6 +68,18 @@ def _auth_failure_response(status: int, detail: str) -> JsonResponse:
 
 @router.post("/register", response={201: TokenOut}, throttle=AUTH_THROTTLE, url_name="register")
 def register(request, payload: RegisterIn):
+    ip = _client_ip(request)
+    if payload.company.strip():
+        # Honeypot tripped — almost certainly a bot.
+        abuse.note_failure(ip, "honeypot")
+        audit_log(request, "abuse.honeypot_hit", user=None, field="company")
+        raise HttpError(400, "Registration rejected.")
+    if not (payload.accepted_tos and payload.accepted_age):
+        raise HttpError(
+            400,
+            "You must accept the Terms of Service and Privacy Policy and confirm "
+            "that you are at least 16 years old.",
+        )
     email = payload.email.lower()
     if User.objects.filter(username=payload.username).exists():
         raise HttpError(400, "That username is already taken.")
@@ -67,8 +88,17 @@ def register(request, payload: RegisterIn):
     user = User.objects.create_user(
         username=payload.username, email=email, password=payload.password
     )
+    auth_services.record_tos_acceptance(user)
     logger.info("user registered: id=%s username=%s ip=%s", user.pk, user.username, _client_ip(request))
-    audit_log(request, "auth.register", user=user, username=user.username, user_id=user.pk)
+    audit_log(
+        request,
+        "auth.register",
+        user=user,
+        username=user.username,
+        user_id=user.pk,
+        tos_version=user.tos_version,
+        age_confirmed=True,
+    )
     try:
         auth_services.send_verification_email(user)
     except Exception:
@@ -84,11 +114,15 @@ def login(request, payload: LoginIn):
     user = authenticate(request, username=payload.username, password=payload.password)
     if user is None:
         logger.warning("login failed: username=%s ip=%s", payload.username, _client_ip(request))
+        abuse.note_failure(_client_ip(request), "login")
         audit_log(request, "auth.login_failed", user=None, username=payload.username)
         raise HttpError(401, "Invalid username or password.")
     user = cast(User, user)  # django-stubs: authenticate() -> AbstractBaseUser | None
-    if auth_services.user_otp_enabled(user) and not auth_services.verify_otp_code(user, payload.otp or ""):
+    if auth_services.user_otp_enabled(user) and not auth_services.verify_otp_or_recovery(
+        user, payload.otp or ""
+    ):
         logger.warning("login otp refused: user=%s ip=%s", user.username, _client_ip(request))
+        abuse.note_failure(_client_ip(request), "otp")
         audit_log(request, "auth.login_otp_failed", user=user, username=user.username)
         raise HttpError(401, "Invalid two-factor code.")
     logger.info("login ok: user=%s ip=%s", user.username, _client_ip(request))
@@ -225,7 +259,7 @@ def otp_enroll(request):
 @router.post(
     "/otp/activate",
     auth=AuthBearer(),
-    response=MessageOut,
+    response=OtpActivatedOut,
     throttle=[SessionAuthThrottle("10/m")],
     url_name="otp_activate",
 )
@@ -233,9 +267,18 @@ def otp_activate(request, payload: OtpCodeIn):
     if not auth_services.confirm_totp_device(request.auth, payload.code):
         logger.warning("otp activation failed: user=%s", request.auth.username)
         raise HttpError(400, "Invalid code.")
+    recovery_codes = auth_services.issue_recovery_codes(request.auth)
     logger.info("otp activated: user=%s", request.auth.username)
-    audit_log(request, "auth.otp_activated", user=request.auth)
-    return {"detail": "Two-factor authentication enabled."}
+    audit_log(
+        request,
+        "auth.otp_activated",
+        user=request.auth,
+        recovery_codes=len(recovery_codes),
+    )
+    return {
+        "detail": "Two-factor authentication enabled.",
+        "recovery_codes": recovery_codes,
+    }
 
 
 @router.post(
@@ -248,9 +291,195 @@ def otp_activate(request, payload: OtpCodeIn):
 def otp_disable(request, payload: OtpCodeIn):
     from django_otp.plugins.otp_totp.models import TOTPDevice
 
+    from .models import RecoveryCode
+
     if not auth_services.verify_otp_code(request.auth, payload.code):
         raise HttpError(400, "Invalid code.")
     TOTPDevice.objects.filter(user=request.auth).delete()
+    RecoveryCode.objects.filter(user=request.auth).delete()
     logger.info("otp disabled: user=%s", request.auth.username)
     audit_log(request, "auth.otp_disabled", user=request.auth)
     return {"detail": "Two-factor authentication disabled."}
+
+
+@router.get(
+    "/otp/recovery-codes",
+    auth=AuthBearer(),
+    response=RecoveryCodesSummaryOut,
+    throttle=[SessionAuthThrottle("60/m")],
+    url_name="otp_recovery_codes",
+)
+def otp_recovery_codes(request):
+    return auth_services.recovery_codes_summary(request.auth)
+
+
+@router.post(
+    "/otp/recovery-codes/regenerate",
+    auth=AuthBearer(),
+    response=OtpActivatedOut,
+    throttle=[SessionAuthThrottle("10/m")],
+    url_name="otp_recovery_codes_regenerate",
+)
+def otp_recovery_codes_regenerate(request, payload: OtpCodeIn):
+    if not auth_services.verify_otp_code(request.auth, payload.code):
+        raise HttpError(400, "Invalid code.")
+    recovery_codes = auth_services.issue_recovery_codes(request.auth)
+    logger.info("recovery codes regenerated: user=%s", request.auth.username)
+    audit_log(
+        request,
+        "auth.recovery_codes_regenerated",
+        user=request.auth,
+        count=len(recovery_codes),
+    )
+    return {
+        "detail": "Recovery codes regenerated.",
+        "recovery_codes": recovery_codes,
+    }
+
+
+# --------------------------------------------------------------------------
+# Moderation (staff only) — is_active=False cuts off JWT *and* API keys
+# --------------------------------------------------------------------------
+def _moderation_target(request, user_id: int):
+    if not auth_services.is_staff(request.auth):
+        raise HttpError(403, "Staff access required.")
+    try:
+        return User.objects.get(pk=user_id)
+    except User.DoesNotExist:
+        raise HttpError(404, "User not found.") from None
+
+
+@router.post(
+    "/moderation/users/{user_id}/disable",
+    auth=AuthBearer(),
+    response=ModerationOut,
+    throttle=[SessionAuthThrottle("30/m")],
+    url_name="moderation_disable_user",
+)
+def moderation_disable_user(request, user_id: int, payload: ModerationIn):
+    target = _moderation_target(request, user_id)
+    if target.pk == request.auth.pk:
+        raise HttpError(400, "You cannot disable your own account.")
+    paused = auth_services.disable_user(target, payload.reason)
+    logger.warning(
+        "account disabled: user=%s reason=%s by=%s paused_monitors=%s",
+        target.username,
+        payload.reason,
+        request.auth.username,
+        paused,
+    )
+    audit_log(
+        request,
+        "moderation.user_disabled",
+        user=target,
+        reason=payload.reason,
+        by=request.auth.username,
+        monitors_paused=paused,
+    )
+    return {
+        "id": target.pk,
+        "username": target.username,
+        "is_active": target.is_active,
+        "disabled_reason": target.disabled_reason,
+        "disabled_at": target.disabled_at,
+        "monitors_paused": paused,
+    }
+
+
+@router.post(
+    "/moderation/users/{user_id}/enable",
+    auth=AuthBearer(),
+    response=ModerationOut,
+    throttle=[SessionAuthThrottle("30/m")],
+    url_name="moderation_enable_user",
+)
+def moderation_enable_user(request, user_id: int):
+    target = _moderation_target(request, user_id)
+    resumed = auth_services.enable_user(target)
+    logger.info(
+        "account re-enabled: user=%s by=%s resumed_monitors=%s",
+        target.username,
+        request.auth.username,
+        resumed,
+    )
+    audit_log(
+        request,
+        "moderation.user_enabled",
+        user=target,
+        by=request.auth.username,
+        monitors_resumed=resumed,
+    )
+    return {
+        "id": target.pk,
+        "username": target.username,
+        "is_active": target.is_active,
+        "disabled_reason": target.disabled_reason,
+        "disabled_at": target.disabled_at,
+        "monitors_paused": resumed,
+    }
+
+
+# --------------------------------------------------------------------------
+# API tokens (programmatic access — send the key as X-API-Key)
+# --------------------------------------------------------------------------
+@router.get(
+    "/tokens",
+    auth=AuthBearer(),
+    response=list[ApiTokenOut],
+    throttle=[SessionAuthThrottle("60/m")],
+    url_name="api_tokens",
+)
+def list_api_tokens(request):
+    from .models import ApiToken
+
+    return [
+        ApiTokenOut(
+            id=token.pk,
+            name=token.name,
+            prefix=token.prefix,
+            scope=token.scope,
+            created_at=token.created_at,
+            last_used_at=token.last_used_at,
+            revoked=token.revoked_at is not None,
+        )
+        for token in ApiToken.objects.filter(user=request.auth)
+    ]
+
+
+@router.post(
+    "/tokens",
+    auth=AuthBearer(),
+    response=ApiTokenCreatedOut,
+    throttle=[SessionAuthThrottle("10/m")],
+    url_name="api_token_create",
+)
+def create_api_token(request, payload: ApiTokenIn):
+    raw, record = auth_services.issue_api_token(request.auth, payload.name, payload.scope)
+    logger.info(
+        "api token created: user=%s id=%s scope=%s",
+        request.auth.username,
+        record.pk,
+        record.scope,
+    )
+    audit_log(request, "auth.api_token_created", user=request.auth, token_id=record.pk, scope=record.scope)
+    return ApiTokenCreatedOut(id=record.pk, name=record.name, token=raw, scope=record.scope)
+
+
+@router.delete(
+    "/tokens/{token_id}",
+    auth=AuthBearer(),
+    response=MessageOut,
+    throttle=[SessionAuthThrottle("10/m")],
+    url_name="api_token_revoke",
+)
+def revoke_api_token(request, token_id: int):
+    from .models import ApiToken
+
+    updated = ApiToken.objects.filter(
+        pk=token_id, user=request.auth, revoked_at__isnull=True
+    ).update(revoked_at=timezone.now())
+    if not updated:
+        raise HttpError(404, "Token not found.")
+    logger.info("api token revoked: user=%s id=%s", request.auth.username, token_id)
+    audit_log(request, "auth.api_token_revoked", user=request.auth, token_id=token_id)
+    return {"detail": "Token revoked."}

@@ -51,6 +51,7 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "config.middleware.SecurityHeadersMiddleware",
+    "config.middleware.BlockedIPMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -182,12 +183,35 @@ COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "False").lower() in ("1", "true"
 DISABLE_THROTTLING = "test" in sys.argv
 
 # --------------------------------------------------------------------------
+# Request size limits — application-level DoS guard (never accept giant bodies)
+# --------------------------------------------------------------------------
+DATA_UPLOAD_MAX_MEMORY_SIZE = 256 * 1024  # bytes (default is 2.5 MB)
+FILE_UPLOAD_MAX_MEMORY_SIZE = 256 * 1024
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 200
+
+# Only trust X-Forwarded-* headers from these proxies. Render/Vercel terminate
+# TLS in front of the app, so their edge IPs must be listed here in production.
+USE_X_FORWARDED_HOST = os.environ.get("USE_X_FORWARDED_HOST", "False").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+TRUSTED_PROXY_IPS = env_list("TRUSTED_PROXY_IPS", "127.0.0.1,::1")
+
+# --------------------------------------------------------------------------
 # CORS — credentials allowed, explicit allow-list only (never '*').
+# DEBUG merges the Vite dev origins; production must list its own explicitly
+# (e.g. https://<your-project>.vercel.app).
 # --------------------------------------------------------------------------
 CORS_ALLOW_CREDENTIALS = True
+_DEV_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
 CORS_ALLOWED_ORIGINS = env_list(
-    "CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+    "CORS_ALLOWED_ORIGINS", ",".join(_DEV_ORIGINS) if DEBUG else ""
 )
+if DEBUG:
+    for _origin in _DEV_ORIGINS:
+        if _origin not in CORS_ALLOWED_ORIGINS:
+            CORS_ALLOWED_ORIGINS.append(_origin)
 CORS_ALLOW_METHODS = ["GET", "POST", "PATCH", "DELETE", "OPTIONS"]
 CORS_ALLOW_HEADERS = [
     "accept",
@@ -210,15 +234,28 @@ CHECK_TIMEOUT_SECONDS = 10
 CHECK_MAX_REDIRECTS = 5
 
 # --------------------------------------------------------------------------
-# Stripe billing
+# Polar.sh billing (merchant of record: handles global tax/VAT for us)
 # --------------------------------------------------------------------------
-STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
-STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
-STRIPE_PRICE_IDS = {
-    "pro": os.environ.get("STRIPE_PRICE_PRO", ""),
-    "business": os.environ.get("STRIPE_PRICE_BUSINESS", ""),
+POLAR_ACCESS_TOKEN = os.environ.get("POLAR_ACCESS_TOKEN", "")
+POLAR_WEBHOOK_SECRET = os.environ.get("POLAR_WEBHOOK_SECRET", "")
+POLAR_PRODUCT_IDS = {
+    "pro": os.environ.get("POLAR_PRODUCT_PRO", ""),
+    "business": os.environ.get("POLAR_PRODUCT_BUSINESS", ""),
 }
+POLAR_USE_SANDBOX = os.environ.get("POLAR_USE_SANDBOX", "False").lower() in ("1", "true", "yes")
+POLAR_API_BASE = (
+    "https://sandbox-api.polar.sh/v1" if POLAR_USE_SANDBOX else "https://api.polar.sh/v1"
+)
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+
+# --------------------------------------------------------------------------
+# Multi-region checks + SSL certificate expiry monitoring
+# --------------------------------------------------------------------------
+# One runner per region; `run_checks` stamps each Check with this label so the
+# dashboard can show a per-region breakdown instead of a single opinion.
+REGION_NAME = os.environ.get("REGION_NAME", "local").strip() or "local"
+SSL_WARN_DAYS = int(os.environ.get("SSL_WARN_DAYS", "30"))
+SSL_CRITICAL_DAYS = int(os.environ.get("SSL_CRITICAL_DAYS", "7"))
 
 # --------------------------------------------------------------------------
 # Logging — our apps log at INFO to the console; framework noise stays WARNING+.
@@ -266,6 +303,11 @@ def _configure_logging(logging_settings: dict) -> None:
 
 
 LOGGING_CONFIG = "config.settings._configure_logging"
+
+# --------------------------------------------------------------------------
+# Legal / compliance — version stamped on every registration (proof of consent)
+# --------------------------------------------------------------------------
+TOS_VERSION = os.environ.get("TOS_VERSION", "1.0")
 
 # --------------------------------------------------------------------------
 # Email — console backend for dev; wire a real provider (SMTP/SES/…) when

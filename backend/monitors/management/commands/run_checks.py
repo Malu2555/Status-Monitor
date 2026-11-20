@@ -7,7 +7,7 @@ see scripts/run_checks_scheduled.ps1 and scripts/crontab.example.
 from django.core.management.base import BaseCommand
 
 from monitors.models import Monitor
-from monitors.services import run_check, should_check
+from monitors.services import evaluate_heartbeat, run_check, should_check
 
 
 class Command(BaseCommand):
@@ -23,10 +23,19 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         monitors = list(Monitor.objects.filter(is_active=True))
         if not options["force"]:
-            monitors = [monitor for monitor in monitors if should_check(monitor)]
+            # Heartbeat monitors are always evaluated (they compare ping age),
+            # HTTP monitors only when their own interval has elapsed.
+            monitors = [
+                monitor
+                for monitor in monitors
+                if monitor.kind == "heartbeat" or should_check(monitor)
+            ]
 
         for monitor in monitors:
-            result = run_check(monitor)
+            if monitor.kind == "heartbeat":
+                result = evaluate_heartbeat(monitor)
+            else:
+                result = run_check(monitor)
             status = "up" if result["is_up"] else "down"
             detail = result["status_code"] or result["error"] or "unknown"
             self.stdout.write(f"{monitor.name}: {status} ({detail}, {result['response_ms']}ms)")

@@ -1,0 +1,63 @@
+# ---------------------------------------------------------------------------
+# TEMPLATE ONLY — this file does nothing until you enable GitHub Actions and
+# add the two repository secrets below. Nothing here is deployed automatically.
+#
+# Why: the free Render web service has no cron add-on, so this workflow calls
+# three staff-only endpoints (see backend/monitors/admin_api.py) that run the
+# same management commands the Linux/Windows schedulers do.
+#
+# Repository secrets required:
+#   API_BASE_URL  e.g. https://your-project.onrender.com   (no trailing slash)
+#   CRON_JWT      an access token for a staff account (short-lived: reissue it
+#                 monthly — or better, mint a dedicated API token and use that
+#                 endpoint family instead when it grows)
+#
+# Manual trigger: Actions → "cron" → Run workflow.
+# ---------------------------------------------------------------------------
+name: cron
+
+on:
+  schedule:
+    - cron: "* * * * *"    # run-checks + deliver-notifications, every minute
+    - cron: "0 6 * * *"    # check-ssl, daily at 06:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: cron-${{ github.event.schedule || 'manual' }}
+  cancel-in-progress: false
+
+jobs:
+  minute-jobs:
+    if: github.event.schedule == '* * * * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: run_checks
+        run: |
+          curl --fail --silent --show-error --max-time 50 \
+            -X POST "$API_BASE_URL/api/admin/run/run-checks" \
+            -H "Authorization: Bearer $CRON_JWT"
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          CRON_JWT: ${{ secrets.CRON_JWT }}
+
+      - name: deliver_notifications
+        run: |
+          curl --fail --silent --show-error --max-time 50 \
+            -X POST "$API_BASE_URL/api/admin/run/deliver-notifications" \
+            -H "Authorization: Bearer $CRON_JWT"
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          CRON_JWT: ${{ secrets.CRON_JWT }}
+
+  ssl-job:
+    if: github.event.schedule == '0 6 * * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: check_ssl
+        run: |
+          curl --fail --silent --show-error --max-time 50 \
+            -X POST "$API_BASE_URL/api/admin/run/check-ssl" \
+            -H "Authorization: Bearer $CRON_JWT"
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          CRON_JWT: ${{ secrets.CRON_JWT }}

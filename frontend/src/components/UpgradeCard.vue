@@ -1,5 +1,5 @@
 <script setup>
-// Plan usage bar + Stripe checkout (upgrade) and portal (manage) buttons.
+// Plan usage bar + Polar checkout (upgrade) and portal (manage) buttons.
 import { computed, ref, watch } from 'vue'
 import * as billingApi from '../api/billing'
 
@@ -46,7 +46,7 @@ async function manage() {
   <div class="card bg-primary-soft">
     <div class="flex justify-between items-center flex-wrap gap-3">
       <div>
-        <p class="text-xs font-semibold text-primary">{{ summary.plan_label }} plan</p>
+        <p class="text-xs font-semibold text-primary">{{ summary.plan_label || summary.label }} plan</p>
         <p class="text-sm text-muted mt-1">
           {{ summary.monitors_used }} of {{ summary.monitors_limit }} monitors in use
         </p>

@@ -1,6 +1,6 @@
 <script setup>
 // Private dashboard: monitor CRUD + uptime chart + plan usage/billing.
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import * as monitorsApi from '../api/monitors'
 import MonitorCard from '../components/MonitorCard.vue'
 import MonitorForm from '../components/MonitorForm.vue'
@@ -19,6 +19,21 @@ const showForm = ref(false)
 const editing = ref(null)
 const detail = ref(null) // { monitor, stats }
 const busy = ref(false)
+const createdHeartbeat = ref(null)
+
+const heartbeatPingUrl = computed(() =>
+  createdHeartbeat.value?.heartbeat_token
+    ? `${window.location.origin}/api/public/heartbeat/${createdHeartbeat.value.heartbeat_token}`
+    : '',
+)
+
+async function copyHeartbeat() {
+  try {
+    await navigator.clipboard.writeText(heartbeatPingUrl.value)
+  } catch {
+    /* clipboard unavailable — the input is selectable */
+  }
+}
 
 async function load() {
   loading.value = true
@@ -50,8 +65,12 @@ async function handleSave(payload) {
   busy.value = true
   error.value = ''
   try {
-    if (editing.value) await monitorsApi.updateMonitor(editing.value.id, payload)
-    else await monitorsApi.createMonitor(payload)
+    if (editing.value) {
+      await monitorsApi.updateMonitor(editing.value.id, payload)
+    } else {
+      const created = await monitorsApi.createMonitor(payload)
+      if (created.kind === 'heartbeat') createdHeartbeat.value = created
+    }
     showForm.value = false
     editing.value = null
     await load()
@@ -79,7 +98,12 @@ async function toggleDetail(monitor) {
     return
   }
   try {
-    detail.value = { monitor, stats: await monitorsApi.monitorStats(monitor.id, 24) }
+    const [stats, regions, ssl] = await Promise.all([
+      monitorsApi.monitorStats(monitor.id, 24),
+      monitorsApi.monitorRegions(monitor.id, 24),
+      monitorsApi.monitorSsl(monitor.id),
+    ])
+    detail.value = { monitor, stats, regions, ssl }
   } catch (e) {
     error.value = e.message
   }
@@ -105,6 +129,21 @@ onMounted(load)
     <div class="mt-6">
       <UpgradeCard v-if="auth.user" :summary="auth.user" />
     </div>
+
+    <div v-if="createdHeartbeat" class="card bg-primary-soft mt-4 text-sm">
+      <p class="font-medium">
+        {{ createdHeartbeat.name }} is ready — ping this URL from your cron job:
+      </p>
+      <input class="input mt-2" :value="heartbeatPingUrl" readonly />
+      <div class="flex gap-2 mt-2">
+        <button class="btn btn-ghost btn-sm" @click="copyHeartbeat">Copy ping URL</button>
+        <button class="btn btn-ghost btn-sm" @click="createdHeartbeat = null">Dismiss</button>
+      </div>
+    </div>
+
+    <p class="text-sm mt-3">
+      <router-link :to="{ name: 'statuspages' }" class="text-primary">Manage status pages →</router-link>
+    </p>
 
     <div v-if="error" class="error-box mt-6">{{ error }}</div>
 
@@ -153,6 +192,33 @@ onMounted(load)
         </div>
         <UptimeChart v-if="detail.stats.series.length" :series="detail.stats.series" :height="160" />
         <p v-else class="text-sm text-muted">No checks recorded yet — they appear after the first scheduled run.</p>
+
+        <div v-if="detail.regions && detail.regions.length" class="mt-4">
+          <p class="text-xs font-semibold text-muted mb-2">REGIONS (consensus)</p>
+          <div class="flex flex-wrap gap-3 text-xs">
+            <span v-for="r in detail.regions" :key="r.region">
+              <strong>{{ r.region }}</strong>:
+              <span :class="r.last_status === 'up' ? 'text-up' : 'text-down'">{{ r.last_status }}</span>
+              · {{ r.uptime_percent != null ? r.uptime_percent + '%' : '—' }}
+            </span>
+          </div>
+        </div>
+
+        <p v-if="detail.ssl" class="text-xs text-muted mt-3">
+          TLS:
+          <template v-if="detail.ssl.days_remaining != null">
+            {{ detail.ssl.days_remaining }} day(s) left
+            <template v-if="detail.ssl.issuer"> · {{ detail.ssl.issuer }}</template>
+          </template>
+          <template v-else>{{ detail.ssl.error }}</template>
+        </p>
+
+        <p v-if="detail.monitor.kind === 'heartbeat'" class="text-xs text-muted mt-2">
+          Heartbeat:
+          <strong>{{ detail.monitor.last_ping_at ? 'last ping ' + timeAgo(detail.monitor.last_ping_at) : 'no ping yet' }}</strong>
+          · expected every {{ detail.monitor.check_interval_seconds }}s
+          (+{{ detail.monitor.heartbeat_grace_seconds }}s grace)
+        </p>
       </div>
     </div>
   </div>

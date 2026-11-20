@@ -1,5 +1,7 @@
 """JWT issuance/validation, cookie helpers and refresh-token blacklist."""
 
+import hashlib
+import logging
 import secrets
 import uuid
 from datetime import UTC, datetime
@@ -12,6 +14,8 @@ from django.utils import timezone as dj_timezone
 from .models import AccountActionToken, RevokedRefreshToken
 
 ALGORITHM = "HS256"
+
+logger = logging.getLogger("accounts")
 
 
 def _utcnow() -> datetime:
@@ -266,3 +270,185 @@ def confirm_totp_device(user, code: str) -> bool:
     device.confirmed = True
     device.save(update_fields=["confirmed"])
     return True
+
+
+# --------------------------------------------------------------------------
+# Two-factor recovery codes (single-use, stored hashed)
+# --------------------------------------------------------------------------
+RECOVERY_CODE_COUNT = 10
+
+
+def _normalize_recovery_code(code: str) -> str:
+    return (code or "").replace("-", "").replace(" ", "").upper()
+
+
+def _hash_recovery_code(code: str) -> str:
+    return hashlib.sha256(_normalize_recovery_code(code).encode()).hexdigest()
+
+
+def issue_recovery_codes(user, count: int = RECOVERY_CODE_COUNT) -> list[str]:
+    """Replace the user's recovery codes; return the new plaintext codes once."""
+    from .models import RecoveryCode
+
+    RecoveryCode.objects.filter(user=user).delete()
+    plaintext: list[str] = []
+    for _ in range(count):
+        raw = secrets.token_hex(8).upper()  # 16 hex chars
+        RecoveryCode.objects.create(user=user, hashed_code=_hash_recovery_code(raw))
+        plaintext.append("-".join(raw[i : i + 4] for i in range(0, len(raw), 4)))
+    return plaintext
+
+
+def recovery_codes_summary(user) -> dict:
+    from .models import RecoveryCode
+
+    queryset = RecoveryCode.objects.filter(user=user)
+    return {
+        "total": queryset.count(),
+        "unused": queryset.filter(used_at__isnull=True).count(),
+    }
+
+
+def verify_otp_or_recovery(user, code: str) -> bool:
+    """Accept either a current TOTP code or a single-use recovery code."""
+    if not code:
+        return False
+    if verify_otp_code(user, code):
+        return True
+    normalized = _normalize_recovery_code(code)
+    if len(normalized) != 16:
+        return False
+    from .models import RecoveryCode
+
+    record = RecoveryCode.objects.filter(
+        user=user, hashed_code=_hash_recovery_code(normalized), used_at__isnull=True
+    ).first()
+    if record is None:
+        return False
+    record.used_at = dj_timezone.now()
+    record.save(update_fields=["used_at"])
+    logger.info("recovery code consumed: user=%s", user.pk)
+    return True
+
+
+# --------------------------------------------------------------------------
+# API tokens (programmatic access via the X-API-Key header)
+# --------------------------------------------------------------------------
+API_TOKEN_PREFIX = "sm_"
+
+
+def hash_api_token(raw: str) -> str:
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def issue_api_token(user, name: str, scope: str = "write"):
+    """Create a token and return ``(plaintext, record)`` — plaintext shown once."""
+    from .models import ApiToken
+
+    raw = API_TOKEN_PREFIX + secrets.token_urlsafe(32)
+    record = ApiToken.objects.create(
+        user=user,
+        name=(name.strip()[:100] or "API token"),
+        prefix=raw[:10],
+        hashed_key=hash_api_token(raw),
+        scope=scope if scope in ("read", "write") else "write",
+    )
+    return raw, record
+
+
+def api_token_record(raw: str):
+    """Return the live ApiToken for a plaintext key, or None."""
+    from .models import ApiToken
+
+    if not raw or not raw.startswith(API_TOKEN_PREFIX):
+        return None
+    try:
+        record = ApiToken.objects.select_related("user").get(
+            hashed_key=hash_api_token(raw), revoked_at__isnull=True
+        )
+    except ApiToken.DoesNotExist:
+        return None
+    if not record.user.is_active:
+        return None
+    now = dj_timezone.now()
+    if record.last_used_at is None or (now - record.last_used_at).total_seconds() > 60:
+        ApiToken.objects.filter(pk=record.pk).update(last_used_at=now)
+    return record
+
+
+# --------------------------------------------------------------------------
+# Legal policies (terms / privacy / acceptable use)
+# --------------------------------------------------------------------------
+POLICY_SLUGS = ("terms", "privacy")
+
+
+def current_policy(slug: str):
+    """Latest published text for ``slug``, or None."""
+    from .models import Policy
+
+    return Policy.objects.filter(slug=slug).order_by("-effective_at", "-created_at").first()
+
+
+def record_tos_acceptance(user):
+    """Stamp proof-of-consent on the account (called once, at registration)."""
+    now = dj_timezone.now()
+    user.tos_accepted_at = now
+    user.age_confirmed_at = now
+    user.tos_version = settings.TOS_VERSION
+    user.save(update_fields=["tos_accepted_at", "age_confirmed_at", "tos_version"])
+    return user
+
+
+# --------------------------------------------------------------------------
+# Moderation: is_active=False is the kill switch (JWT + API keys both honour it)
+# --------------------------------------------------------------------------
+def disable_user(user, reason: str = "manual") -> int:
+    """Deactivate an account and pause its monitors. Returns how many were paused."""
+    from monitors.models import Monitor
+
+    paused_ids = list(
+        Monitor.objects.filter(owner=user, is_active=True).values_list("id", flat=True)
+    )
+    if paused_ids:
+        Monitor.objects.filter(id__in=paused_ids).update(is_active=False)
+    user.is_active = False
+    user.disabled_reason = reason
+    user.disabled_at = dj_timezone.now()
+    user.paused_monitor_ids = paused_ids
+    user.save(
+        update_fields=[
+            "is_active",
+            "disabled_reason",
+            "disabled_at",
+            "paused_monitor_ids",
+        ]
+    )
+    return len(paused_ids)
+
+
+def enable_user(user) -> int:
+    """Reactivate an account and resume only the monitors moderation paused."""
+    from monitors.models import Monitor
+
+    paused_ids = list(user.paused_monitor_ids or [])
+    resumed = 0
+    if paused_ids:
+        resumed = Monitor.objects.filter(id__in=paused_ids, owner=user).update(is_active=True)
+    user.is_active = True
+    user.disabled_reason = ""
+    user.disabled_at = None
+    user.paused_monitor_ids = []
+    user.save(
+        update_fields=[
+            "is_active",
+            "disabled_reason",
+            "disabled_at",
+            "paused_monitor_ids",
+        ]
+    )
+    return resumed
+
+
+def is_staff(user) -> bool:
+    """True when the authenticated principal may moderate other accounts."""
+    return bool(user is not None and getattr(user, "is_staff", False))

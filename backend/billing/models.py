@@ -20,8 +20,9 @@ class Subscription(models.Model):
     )
     plan = models.CharField(max_length=20, choices=Plan.choices, default=Plan.FREE)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
-    stripe_subscription_id = models.CharField(max_length=100, blank=True, default="")
-    stripe_customer_id = models.CharField(max_length=100, blank=True, default="")
+    polar_subscription_id = models.CharField(max_length=64, blank=True, default="")
+    polar_customer_id = models.CharField(max_length=64, blank=True, default="")
+    polar_product_id = models.CharField(max_length=64, blank=True, default="")
     current_period_end = models.DateTimeField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -29,15 +30,17 @@ class Subscription(models.Model):
         return f"{self.user} — {self.plan} ({self.status})"
 
 
-class StripeEvent(models.Model):
-    """Verified Stripe webhook event; makes webhook processing idempotent.
+class WebhookEvent(models.Model):
+    """Verified billing webhook event; makes webhook processing idempotent.
 
-    Stripe redelivers webhooks until they return 2xx, so the same event may
-    arrive more than once. ``processed_at`` marks the moment the event's
-    effects were applied; duplicate deliveries are skipped.
+    Polar.sh redelivers webhooks until they return 2xx, so the same delivery
+    may arrive more than once. ``processed_at`` marks the moment the event's
+    effects were applied; duplicate deliveries are skipped. ``provider`` keeps
+    the ledger future-proof if we ever add a second gateway.
     """
 
-    id = models.CharField(primary_key=True, max_length=64)  # Stripe event id ("evt_…")
+    id = models.CharField(primary_key=True, max_length=64)  # provider delivery id
+    provider = models.CharField(max_length=24, default="polar")
     type = models.CharField(max_length=128)
     payload = models.JSONField(default=dict)
     processed_at = models.DateTimeField(null=True, blank=True)
@@ -45,4 +48,4 @@ class StripeEvent(models.Model):
 
     def __str__(self):
         state = "processed" if self.processed_at else "pending"
-        return f"{self.id} ({self.type}, {state})"
+        return f"{self.provider}:{self.id} ({self.type}, {state})"

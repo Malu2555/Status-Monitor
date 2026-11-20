@@ -197,3 +197,13 @@
 @media (min-width: 768px) {
   .monitor-grid { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* Off-screen honeypot field: invisible to humans, tempting to naive bots.
+   The backend rejects any registration where it is filled in. */
+.honeypot {
+  position: absolute;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}

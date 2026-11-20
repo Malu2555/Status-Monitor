@@ -36,6 +36,8 @@ class AuditHookTests(TestCase):
                     "username": "newuser",
                     "email": "new@example.com",
                     "password": "Str0ng-Pass!",
+                    "accepted_tos": True,
+                    "accepted_age": True,
                 }
             ),
             content_type="application/json",

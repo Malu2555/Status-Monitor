@@ -12,18 +12,32 @@ const username = ref('')
 const email = ref('')
 const password = ref('')
 const confirm = ref('')
+const acceptedTos = ref(false)
+const acceptedAge = ref(false)
+const company = ref('') // honeypot — must stay empty
 const error = ref('')
 const busy = ref(false)
 
 async function submit() {
   error.value = ''
+  if (!acceptedTos.value || !acceptedAge.value) {
+    error.value = 'Please accept the Terms of Service and confirm your age.'
+    return
+  }
   if (password.value !== confirm.value) {
     error.value = 'Passwords do not match.'
     return
   }
   busy.value = true
   try {
-    await auth.register({ username: username.value, email: email.value, password: password.value })
+    await auth.register({
+      username: username.value,
+      email: email.value,
+      password: password.value,
+      accepted_tos: acceptedTos.value,
+      accepted_age: acceptedAge.value,
+      company: company.value,
+    })
     router.push({ name: 'dashboard' })
   } catch (e) {
     error.value = e.message || 'Registration failed.'
@@ -57,7 +71,31 @@ async function submit() {
           <label class="label" for="confirm">Confirm password</label>
           <input id="confirm" v-model="confirm" type="password" class="input" required minlength="8" autocomplete="new-password" />
         </div>
-        <button type="submit" class="btn btn-primary w-full" :disabled="busy">
+        <div class="field">
+          <label class="flex items-start gap-2 text-sm">
+            <input v-model="acceptedTos" type="checkbox" class="checkbox mt-1" />
+            <span>
+              I have read and accept the
+              <router-link :to="{ name: 'terms' }" target="_blank">Terms of Service</router-link>
+              and
+              <router-link :to="{ name: 'privacy' }" target="_blank">Privacy Policy</router-link>.
+            </span>
+          </label>
+          <label class="flex items-start gap-2 text-sm mt-2">
+            <input v-model="acceptedAge" type="checkbox" class="checkbox mt-1" />
+            <span>I confirm that I am at least 16 years old.</span>
+          </label>
+        </div>
+        <!-- Honeypot: hidden from humans, irresistible to naive bots. -->
+        <div class="honeypot" aria-hidden="true">
+          <label for="company">Company</label>
+          <input id="company" v-model="company" type="text" tabindex="-1" autocomplete="off" />
+        </div>
+        <button
+          type="submit"
+          class="btn btn-primary w-full"
+          :disabled="busy || !acceptedTos || !acceptedAge"
+        >
           {{ busy ? 'Creating account…' : 'Create account' }}
         </button>
       </form>

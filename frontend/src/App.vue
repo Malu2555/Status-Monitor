@@ -10,7 +10,12 @@ import NavBar from './components/NavBar.vue'
   </main>
   <footer class="footer">
     <p class="text-xs text-muted">
-      Status Monitor — free public status page · private dashboard · Stripe billing
+      Status Monitor · open-source uptime &amp; status pages · billing by Polar
+    </p>
+    <p class="text-xs text-muted mt-1">
+      <router-link :to="{ name: 'terms' }">Terms of Service</router-link>
+      ·
+      <router-link :to="{ name: 'privacy' }">Privacy Policy</router-link>
     </p>
   </footer>
 </template>

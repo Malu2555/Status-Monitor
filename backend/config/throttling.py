@@ -30,9 +30,30 @@ class SessionAuthThrottle(_TestAwareThrottle, AuthRateThrottle):
 
 
 class PublicAnonThrottle(_TestAwareThrottle, AnonRateThrottle):
-    """60 req/min per IP — free public status feed + Stripe webhook."""
+    """60 req/min per IP — free public status feed + Polar billing webhook."""
 
     scope = "public_anon"
+
+
+class IpEnvelopeThrottle(_TestAwareThrottle, AnonRateThrottle):
+    """Coarse per-IP envelope across every route (1500/h).
+
+    Stacks on top of the per-route throttles so an attacker rotating usernames
+    or hammering cheap endpoints still hits a wall, while a busy NAT with a
+    handful of active users stays comfortably under the cap.
+    """
+
+    scope = "ip_envelope"
+
+
+class AdminJobThrottle(_TestAwareThrottle, AuthRateThrottle):
+    """Per-user limit for the operator cron triggers.
+
+    Separate scope from session_auth: the scheduler legitimately calls these 60
+    times an hour (once a minute), while still capping abuse at 2/min.
+    """
+
+    scope = "admin_job"
 
 
 class MonitorAuthThrottle(_TestAwareThrottle, AuthRateThrottle):

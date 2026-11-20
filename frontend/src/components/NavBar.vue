@@ -20,6 +20,8 @@ async function onLogout() {
         <router-link :to="{ name: 'public' }" class="nav-link">Status</router-link>
         <template v-if="auth.isAuthenticated">
           <router-link :to="{ name: 'dashboard' }" class="nav-link">Dashboard</router-link>
+          <router-link :to="{ name: 'statuspages' }" class="nav-link">Status pages</router-link>
+          <router-link :to="{ name: 'security' }" class="nav-link">Security</router-link>
           <span class="text-sm text-muted px-2">{{ auth.user?.username }}</span>
           <button class="btn btn-ghost btn-sm" @click="onLogout">Log out</button>
         </template>

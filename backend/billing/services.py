@@ -1,11 +1,24 @@
-"""Stripe client wrappers, plan definitions and webhook→DB synchronization."""
+"""Polar.sh client wrappers, plan definitions and webhook→DB sync.
+
+Polar is our merchant of record: it collects payments, handles global tax/VAT
+and pays us net. We only need two REST calls (via ``httpx``, no SDK):
+create a Checkout Session URL, and create a Customer Session for the portal.
+Webhooks are verified with the Standard Webhooks HMAC scheme.
+Everything plan-limit related is pure Django and provider independent.
+"""
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import hmac
 import logging
+import time
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Mapping
 
+import httpx
 from django.conf import settings
 from django.utils import timezone
 
@@ -17,36 +30,60 @@ if TYPE_CHECKING:  # import-time only (avoids a circular import with accounts)
 logger = logging.getLogger("billing")
 
 PLANS = {
-    "free": {
-        "label": "Free",
-        "monitors": 1,
-        "min_interval": 300,
-        "price_id": settings.STRIPE_PRICE_IDS.get("free", ""),
-    },
+    "free": {"label": "Free", "monitors": 1, "min_interval": 300, "product_id": ""},
     "pro": {
         "label": "Pro",
         "monitors": 10,
         "min_interval": 60,
-        "price_id": settings.STRIPE_PRICE_IDS.get("pro", ""),
+        "product_id": settings.POLAR_PRODUCT_IDS.get("pro", ""),
     },
     "business": {
         "label": "Business",
         "monitors": 50,
         "min_interval": 60,
-        "price_id": settings.STRIPE_PRICE_IDS.get("business", ""),
+        "product_id": settings.POLAR_PRODUCT_IDS.get("business", ""),
     },
 }
 
+# Healthy statuses keep the plan usable unconditionally.
 ACTIVE_STATUSES = ("active", "trialing")
+# During dunning/cancellation Polar keeps the subscription alive until the paid
+# period ends — we mirror that so customers don't lose access early.
+GRACE_STATUSES = ("past_due", "canceled")
+
+# Polar subscription status → our Subscription.Status.
+_STATUS_MAP = {
+    "incomplete": "incomplete",
+    "incomplete_expired": "canceled",
+    "trialing": "trialing",
+    "active": "active",
+    "past_due": "past_due",
+    "canceled": "canceled",
+    "unpaid": "past_due",
+}
+
+WEBHOOK_TOLERANCE_SECONDS = 300
 
 
-class StripeNotConfigured(RuntimeError):
-    pass
+class PolarNotConfigured(RuntimeError):
+    """Raised when no API token is configured on the server."""
+
+
+class SignatureError(ValueError):
+    """Raised when a webhook signature does not match the raw body."""
 
 
 def _active_subscription(user) -> Subscription | None:
     subscription = getattr(user, "subscription", None)
-    if subscription is not None and subscription.status in ACTIVE_STATUSES:
+    if subscription is None:
+        return None
+    if subscription.status in ACTIVE_STATUSES:
+        return subscription
+    if (
+        subscription.status in GRACE_STATUSES
+        and subscription.current_period_end
+        and subscription.current_period_end > timezone.now()
+    ):
         return subscription
     return None
 
@@ -81,16 +118,22 @@ def get_plan_summary(user) -> dict:
         "monitors_used": user.monitors.count(),
         "monitors_limit": monitors_limit(user),
         "subscription_status": subscription.status if subscription else "active",
+        "current_period_end": (
+            subscription.current_period_end.isoformat()
+            if subscription is not None and subscription.current_period_end
+            else None
+        ),
     }
 
 
-def stripe_api():
-    if not settings.STRIPE_SECRET_KEY:
-        raise StripeNotConfigured("Stripe is not configured on this server.")
-    import stripe
-
-    stripe.api_key = settings.STRIPE_SECRET_KEY
-    return stripe
+def polar_headers() -> dict:
+    if not settings.POLAR_ACCESS_TOKEN:
+        raise PolarNotConfigured("Polar is not configured on this server.")
+    return {
+        "Authorization": f"Bearer {settings.POLAR_ACCESS_TOKEN}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
 
 
 def _frontend_url(path: str = "") -> str:
@@ -99,146 +142,261 @@ def _frontend_url(path: str = "") -> str:
 
 
 def create_checkout_session(user, plan: str) -> str:
+    """Create a Polar Checkout Session URL for one of our paid plans."""
     if plan not in ("pro", "business"):
         raise ValueError("Unknown plan.")
-    stripe = stripe_api()
-    price_id = PLANS[plan]["price_id"]
-    if not price_id:
-        raise ValueError("Stripe price for this plan is not configured.")
-    if not user.stripe_customer_id:
-        customer = stripe.Customer.create(email=user.email, metadata={"user_id": str(user.pk)})
-        user.stripe_customer_id = customer["id"]
-        user.save(update_fields=["stripe_customer_id"])
-    session = stripe.checkout.Session.create(
-        mode="subscription",
-        customer=user.stripe_customer_id,
-        line_items=[{"price": price_id, "quantity": 1}],
-        metadata={"user_id": str(user.pk), "plan": plan},
-        success_url=_frontend_url("/dashboard?billing=success"),
-        cancel_url=_frontend_url("/dashboard?billing=cancel"),
+    product_id = PLANS[plan]["product_id"]
+    if not product_id:
+        raise ValueError("Polar product for this plan is not configured.")
+    body = {
+        "product_id": product_id,
+        "success_url": _frontend_url("/dashboard?billing=success"),
+        "customer_email": user.email,
+        "metadata": {"user_id": str(user.pk), "plan": plan},
+        "customer_metadata": {"user_id": str(user.pk)},
+        "allow_discount_codes": True,
+    }
+    response = httpx.post(
+        f"{settings.POLAR_API_BASE}/checkout-sessions",
+        json=body,
+        headers=polar_headers(),
+        timeout=20,
     )
-    return session["url"]
+    response.raise_for_status()
+    url = response.json()["url"]
+    logger.info("polar checkout created: user=%s plan=%s", user.pk, plan)
+    return url
 
 
 def create_portal_session(user) -> str:
-    if not user.stripe_customer_id:
-        raise ValueError("No Stripe customer exists yet — subscribe first.")
-    stripe = stripe_api()
-    session = stripe.billing_portal.Session.create(
-        customer=user.stripe_customer_id, return_url=_frontend_url("/dashboard")
+    """Create a Polar Customer Session and return its portal URL."""
+    if not user.polar_customer_id:
+        raise ValueError("No active subscription — subscribe first.")
+    response = httpx.post(
+        f"{settings.POLAR_API_BASE}/customer-sessions",
+        json={"customer_id": user.polar_customer_id},
+        headers=polar_headers(),
+        timeout=20,
     )
-    return session["url"]
+    response.raise_for_status()
+    url = response.json().get("customer_portal_url")
+    if not url:
+        raise ValueError("Polar did not return a customer portal URL.")
+    return url
 
 
-def _plan_for_price(price_id: str):
+def verify_signature(request_body: bytes, headers: Mapping[str, str]) -> None:
+    """Verify a Polar webhook using the Standard Webhooks HMAC scheme."""
+    secret = settings.POLAR_WEBHOOK_SECRET
+    if not secret:
+        raise PolarNotConfigured("Webhook verification is not configured.")
+    msg_id = headers.get("webhook-id", "")
+    timestamp = headers.get("webhook-timestamp", "")
+    signature_header = headers.get("webhook-signature", "")
+    if not (msg_id and timestamp and signature_header):
+        raise SignatureError("Missing webhook signature headers.")
+    try:
+        ts = int(timestamp)
+    except (TypeError, ValueError) as exc:
+        raise SignatureError("Invalid webhook timestamp.") from exc
+    if abs(time.time() - ts) > WEBHOOK_TOLERANCE_SECONDS:
+        raise SignatureError("Webhook timestamp outside tolerance.")
+
+    # Standard Webhooks: the secret is base64 after the optional whsec_ prefix.
+    raw_secret = secret[6:] if secret.startswith("whsec_") else secret
+    try:
+        key = base64.b64decode(raw_secret, validate=True)
+    except (binascii.Error, ValueError):
+        key = secret.encode()
+
+    signed_content = f"{msg_id}.{timestamp}.".encode() + request_body
+    expected = base64.b64encode(
+        hmac.new(key, signed_content, hashlib.sha256).digest()
+    ).decode()
+    for part in signature_header.split():
+        version, _, provided = part.partition(",")
+        if version == "v1" and hmac.compare_digest(expected, provided):
+            return
+    raise SignatureError("Invalid signature.")
+
+
+def _plan_for_product(product_id: Any) -> str | None:
+    wanted = str(product_id or "")
+    if not wanted:
+        return None
     for plan, config in PLANS.items():
-        if config["price_id"] == price_id:
+        if config["product_id"] and str(config["product_id"]) == wanted:
             return plan
     return None
 
 
-def _ts_to_dt(timestamp):
-    if not timestamp:
+def _parse_datetime(value: Any) -> datetime | None:
+    if not value:
         return None
-    return datetime.fromtimestamp(int(timestamp), tz=UTC)
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(UTC)
+    except ValueError:
+        return None
 
 
-def handle_webhook_event(event: dict) -> None:
-    """Sync a verified Stripe event into Subscription rows, idempotently.
+def _status_for(polar_status: str):
+    from .models import Subscription
 
-    Stripe delivers webhooks at-least-once, so each event id is claimed in a
-    StripeEvent row (inside a transaction, FOR UPDATE) before applying;
-    duplicate deliveries of an already-processed id are skipped.
+    return _STATUS_MAP.get(polar_status or "", Subscription.Status.PAST_DUE)
+
+
+def _resolve_user(event: dict):
+    from accounts.models import User
+
+    data = event.get("data", {}) or {}
+    metadata = data.get("metadata") or {}
+    user_id = metadata.get("user_id") if isinstance(metadata, dict) else None
+    if user_id:
+        user = User.objects.filter(pk=user_id).first()
+        if user is not None:
+            return user
+    email = (data.get("customer") or {}).get("email")
+    if email:
+        return User.objects.filter(email__iexact=str(email)).first()
+    return None
+
+
+def handle_webhook_event(event: dict, delivery_id: str = "") -> None:
+    """Sync a verified Polar event into Subscription rows, idempotently.
+
+    The ``WebhookEvent`` row claims each delivery id inside a transaction
+    (FOR UPDATE) before applying; duplicate deliveries of an already-processed
+    id are skipped, matching Polar's at-least-once delivery semantics.
     """
     from django.db import transaction
 
-    event_id = event.get("id") or ""
-    if not event_id:
-        logger.warning("stripe webhook: event without id — applying without idempotency")
+    from .models import WebhookEvent
+
+    event_type = event.get("type", "")
+    if not delivery_id:
+        logger.warning("polar webhook: delivery without webhook-id — applying without idempotency")
         _apply_event(event)
         return
 
-    from .models import StripeEvent
-
     with transaction.atomic():
-        stripe_event, created = StripeEvent.objects.select_for_update().get_or_create(
-            id=event_id, defaults={"type": event.get("type", ""), "payload": event}
+        webhook_event, created = WebhookEvent.objects.select_for_update().get_or_create(
+            id=delivery_id,
+            defaults={"provider": "polar", "type": event_type, "payload": event},
         )
-        if not created and stripe_event.processed_at is not None:
-            logger.info("webhook %s: duplicate delivery skipped", event_id)
+        if not created and webhook_event.processed_at is not None:
+            logger.info("webhook %s: duplicate delivery skipped", delivery_id)
             return
         _apply_event(event)
         audit_log(
             None,
             "billing.webhook_processed",
             user=None,
-            event_id=event_id,
-            event_type=event.get("type", ""),
+            event_id=delivery_id,
+            event_type=event_type,
         )
-        stripe_event.processed_at = timezone.now()
-        stripe_event.save(update_fields=["processed_at"])
+        webhook_event.processed_at = timezone.now()
+        webhook_event.save(update_fields=["processed_at"])
 
 
 def _apply_event(event: dict) -> None:
-    """Apply a verified Stripe event to Subscription rows (no idempotency)."""
+    """Apply a verified Polar event to Subscription rows (no idempotency)."""
     from .models import Subscription
 
     event_type = event.get("type", "")
-    data = event.get("data", {}).get("object", {})
+    data = event.get("data", {}) or {}
+    subscription_id = str(data.get("id") or "")
+    product_id = str(data.get("product_id") or "")
+    customer_id = str(data.get("customer_id") or "")
+    customer = data.get("customer") or {}
 
-    if event_type == "checkout.session.completed":
-        from accounts.models import User
-
-        user = User.objects.filter(pk=data.get("metadata", {}).get("user_id", "")).first()
-        sub_id = data.get("subscription")
-        plan = data.get("metadata", {}).get("plan", "pro")
-        customer = data.get("customer", "")
-        if user is None or not sub_id:
-            return
-        if customer:
-            user.stripe_customer_id = customer
-            user.save(update_fields=["stripe_customer_id"])
-        logger.info(
-            "webhook checkout.session.completed: user=%s sub=%s plan=%s", user.pk, sub_id, plan
+    if event_type in ("subscription.created", "subscription.updated", "subscription.active"):
+        subscription = (
+            Subscription.objects.filter(polar_subscription_id=subscription_id).first()
+            if subscription_id
+            else None
         )
-        Subscription.objects.update_or_create(
-            user=user,
-            defaults={
-                "plan": plan if plan in PLANS else "pro",
-                "status": "active",
-                "stripe_subscription_id": sub_id,
-                "stripe_customer_id": customer,
-                "current_period_end": _ts_to_dt(data.get("current_period_end")),
-            },
+        if subscription is None:
+            user = _resolve_user(event)
+            if user is None:
+                logger.warning(
+                    "polar webhook %s: no user for sub=%s email=%s",
+                    event_type,
+                    subscription_id,
+                    customer.get("email"),
+                )
+                return
+            subscription, _ = Subscription.objects.get_or_create(user=user)
+
+        plan = _plan_for_product(product_id)
+        if plan is None:
+            plan = (data.get("metadata") or {}).get("plan")
+            if plan not in PLANS:
+                plan = subscription.plan if subscription.plan in PLANS else "pro"
+
+        subscription.plan = plan
+        subscription.status = _status_for(data.get("status", "active"))
+        subscription.polar_subscription_id = subscription_id
+        subscription.polar_customer_id = customer_id
+        subscription.polar_product_id = product_id
+        subscription.current_period_end = _parse_datetime(
+            data.get("current_period_end") or data.get("ends_at")
+        )
+        subscription.save()
+
+        if customer_id:
+            user = subscription.user
+            if user.polar_customer_id != customer_id:
+                user.polar_customer_id = customer_id
+                user.save(update_fields=["polar_customer_id"])
+
+        logger.info(
+            "polar webhook %s: sub=%s user=%s plan=%s status=%s",
+            event_type,
+            subscription_id,
+            subscription.user.pk,
+            subscription.plan,
+            subscription.status,
         )
         return
 
-    if event_type in ("customer.subscription.updated", "customer.subscription.deleted"):
-        subscription = Subscription.objects.filter(stripe_subscription_id=data.get("id")).first()
+    if event_type in ("subscription.canceled", "subscription.revoked"):
+        subscription = Subscription.objects.filter(
+            polar_subscription_id=subscription_id
+        ).first()
         if subscription is None:
             return
-        status = data.get("status", "canceled")
-        if status in ("canceled", "unpaid", "incomplete_expired"):
+        if event_type == "subscription.revoked":
+            # Access is revoked immediately — drop to Free.
             subscription.status = Subscription.Status.CANCELED
             subscription.plan = "free"
+            subscription.current_period_end = None
         else:
-            plan = None
-            items = data.get("items", {}).get("data", []) if isinstance(data.get("items"), dict) else []
-            for item in items:
-                plan = _plan_for_price((item.get("price") or {}).get("id", ""))
-                if plan:
-                    break
-            subscription.status = status
-            if plan:
-                subscription.plan = plan
-        subscription.current_period_end = _ts_to_dt(data.get("current_period_end"))
+            # Canceled but still paid until the period ends (grace window).
+            subscription.status = Subscription.Status.CANCELED
+            subscription.current_period_end = _parse_datetime(
+                data.get("current_period_end") or data.get("ends_at")
+            )
+        subscription.save(update_fields=["status", "plan", "current_period_end", "updated_at"])
         logger.info(
-            "webhook %s: sub=%s user=%s status=%s",
+            "polar webhook %s: sub=%s user=%s -> %s",
             event_type,
-            data.get("id"),
+            subscription_id,
             subscription.user.pk,
             subscription.status,
         )
-        subscription.save()
         return
+
+    if event_type == "subscription.past_due":
+        subscription = Subscription.objects.filter(
+            polar_subscription_id=subscription_id
+        ).first()
+        if subscription is None:
+            return
+        subscription.status = Subscription.Status.PAST_DUE
+        subscription.save(update_fields=["status", "updated_at"])
+        logger.warning(
+            "polar webhook past_due: sub=%s user=%s", subscription_id, subscription.user.pk
+        )
 

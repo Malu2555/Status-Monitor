@@ -1,7 +1,7 @@
-from ninja.security import HttpBearer
+from ninja.security import APIKeyHeader, HttpBearer
 
 from .models import User
-from .services import safe_decode_token, user_from_payload
+from .services import api_token_record, safe_decode_token, user_from_payload
 
 
 class AuthBearer(HttpBearer):
@@ -15,3 +15,20 @@ class AuthBearer(HttpBearer):
         if payload is None:
             return None  # missing, expired, wrong type or bad signature
         return user_from_payload(payload)
+
+
+class ApiKeyAuth(APIKeyHeader):
+    """Authenticates requests presenting an ``X-API-Key`` token.
+
+    Exposes the token scope on ``request.api_token_scope`` so write endpoints
+    can reject read-only tokens. Returns the owning ``User`` (like JWT auth).
+    """
+
+    param_name = "X-API-Key"
+
+    def authenticate(self, request, key) -> "User | None":
+        record = api_token_record(key)
+        if record is None:
+            return None
+        request.api_token_scope = record.scope  # type: ignore[attr-defined]
+        return record.user

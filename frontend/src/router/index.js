@@ -8,6 +8,11 @@ const routes = [
     component: () => import('../views/PublicStatusView.vue'),
   },
   {
+    path: '/p/:slug',
+    name: 'statuspage',
+    component: () => import('../views/StatusPageView.vue'),
+  },
+  {
     path: '/login',
     name: 'login',
     component: () => import('../views/LoginView.vue'),
@@ -18,9 +23,33 @@ const routes = [
     component: () => import('../views/RegisterView.vue'),
   },
   {
+    path: '/terms',
+    name: 'terms',
+    component: () => import('../views/LegalView.vue'),
+    props: { slug: 'terms' },
+  },
+  {
+    path: '/privacy',
+    name: 'privacy',
+    component: () => import('../views/LegalView.vue'),
+    props: { slug: 'privacy' },
+  },
+  {
     path: '/dashboard',
     name: 'dashboard',
     component: () => import('../views/DashboardView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/security',
+    name: 'security',
+    component: () => import('../views/SecurityView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/status-pages',
+    name: 'statuspages',
+    component: () => import('../views/StatusPagesView.vue'),
     meta: { requiresAuth: true },
   },
 ]

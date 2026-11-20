@@ -16,3 +16,4 @@ class BillingSummaryOut(Schema):
     monitors_used: int
     monitors_limit: int
     subscription_status: str
+    current_period_end: str | None = None

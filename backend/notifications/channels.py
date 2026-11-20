@@ -1,4 +1,8 @@
-"""Channel dispatch: turn one NotificationDelivery into an outbound message."""
+"""Channel dispatch: turn one NotificationDelivery into an outbound message.
+
+Supported kinds: email, generic webhook, Slack incoming webhook, Discord
+webhook, and Telegram (address format ``bot_token|chat_id``).
+"""
 import logging
 
 import httpx
@@ -13,6 +17,15 @@ SUBJECTS = {
 }
 
 
+def _subject(row) -> str:
+    if row.event_kind == "ssl":
+        details = row.payload or {}
+        level = details.get("level", "warn")
+        icon = "🚨" if level == "critical" else "🔒"
+        return f"{icon} {row.monitor.name} TLS expires in {details.get('days_remaining')} day(s)"
+    return SUBJECTS.get(row.event_kind, "{name} status change").format(name=row.monitor.name)
+
+
 def _monitor_lines(row) -> list[str]:
     monitor = row.monitor
     details = row.payload or {}
@@ -21,6 +34,12 @@ def _monitor_lines(row) -> list[str]:
         f"URL: {monitor.url}",
         f"Event: {row.event_kind.upper()}",
     ]
+    if row.event_kind == "ssl":
+        lines.append(
+            f"TLS certificate expires in {details.get('days_remaining')} day(s) "
+            f"(level: {details.get('level', 'warn')})"
+        )
+        return lines
     if details.get("status_code") is not None:
         lines.append(f"HTTP status: {details['status_code']}")
     if details.get("response_ms") is not None:
@@ -30,11 +49,14 @@ def _monitor_lines(row) -> list[str]:
     return lines
 
 
+def _text(row) -> str:
+    return f"{_subject(row)}\n" + "\n".join(_monitor_lines(row))
+
+
 def _dispatch_email(address: str, row) -> None:
-    subject = SUBJECTS[row.event_kind].format(name=row.monitor.name)
     send_mail(
-        subject,
-        "\n".join(_monitor_lines(row)),
+        _subject(row),
+        _text(row),
         settings.DEFAULT_FROM_EMAIL,
         [address],
         fail_silently=False,
@@ -58,11 +80,43 @@ def _dispatch_webhook(address: str, row) -> None:
         response.raise_for_status()
 
 
+def _dispatch_slack(address: str, row) -> None:
+    with httpx.Client(timeout=10) as client:
+        response = client.post(address, json={"text": _text(row)})
+        response.raise_for_status()
+
+
+def _dispatch_discord(address: str, row) -> None:
+    with httpx.Client(timeout=10) as client:
+        response = client.post(address, json={"content": _text(row)})
+        response.raise_for_status()
+
+
+def _dispatch_telegram(address: str, row) -> None:
+    """Telegram: ``address`` is ``bot_token|chat_id`` (tokens contain colons)."""
+    token, _, chat_id = address.partition("|")
+    if not token or not chat_id:
+        raise ValueError("Telegram channel address must be 'bot_token|chat_id'.")
+    with httpx.Client(timeout=10) as client:
+        response = client.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": _text(row), "disable_web_page_preview": True},
+        )
+        response.raise_for_status()
+
+
+_HANDLERS = {
+    "email": _dispatch_email,
+    "webhook": _dispatch_webhook,
+    "slack": _dispatch_slack,
+    "discord": _dispatch_discord,
+    "telegram": _dispatch_telegram,
+}
+
+
 def dispatch(channel, row) -> None:
     """Send one delivery through its channel; raises on failure."""
-    if channel.kind == "email":
-        _dispatch_email(channel.address, row)
-    elif channel.kind == "webhook":
-        _dispatch_webhook(channel.address, row)
-    else:
+    handler = _HANDLERS.get(channel.kind)
+    if handler is None:
         raise ValueError(f"unsupported notification channel kind: {channel.kind!r}")
+    handler(channel.address, row)

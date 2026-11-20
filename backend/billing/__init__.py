@@ -1,1 +1,1 @@
-"""Billing: Stripe freemium subscriptions + plan limits."""
+"""Polar.sh billing: merchant of record for developers (tax handled by Polar)."""

@@ -90,3 +90,33 @@ def deliver_pending(batch: int = 50, max_attempts: int = 8) -> tuple[int, int, i
             row.save(update_fields=["attempts", "status", "last_error", "sent_at"])
     logger.info("notification delivery pass: sent=%d failed=%d dead=%d", sent, failed, dead)
     return sent, failed, dead
+
+
+def enqueue_ssl_alert(monitor, days_remaining: int, level: str) -> int:
+    """Queue one TLS-expiry alert per enabled channel.
+
+    Escalation/dedupe (only alert when the level crosses a threshold) is the
+    caller's responsibility — see the ``check_ssl`` management command.
+    """
+    channels = list(MonitorNotificationChannel.objects.filter(monitor=monitor, enabled=True))
+    if not channels:
+        return 0
+    NotificationDelivery.objects.bulk_create(
+        [
+            NotificationDelivery(
+                monitor=monitor,
+                channel=channel,
+                event_kind="ssl",
+                payload={"days_remaining": days_remaining, "level": level},
+            )
+            for channel in channels
+        ]
+    )
+    logger.info(
+        "notifications enqueued: monitor=%s ssl level=%s days=%s channels=%d",
+        monitor.pk,
+        level,
+        days_remaining,
+        len(channels),
+    )
+    return len(channels)

@@ -33,7 +33,7 @@ class MonitorApiTests(TestCase):
     def setUp(self):
         resp = self.client.post(
             "/api/auth/register",
-            data=json.dumps({"username": "monuser", "email": "mon@example.com", "password": "Str0ng-Pass!"}),
+            data=json.dumps({"username": "monuser", "email": "mon@example.com", "password": "Str0ng-Pass!", "accepted_tos": True, "accepted_age": True}),
             content_type="application/json",
         )
         self.access = resp.json()["access"]
@@ -93,7 +93,7 @@ class MonitorApiTests(TestCase):
         # second user must not see or touch it
         self.client.post(
             "/api/auth/register",
-            data=json.dumps({"username": "other", "email": "other@example.com", "password": "Str0ng-Pass!"}),
+            data=json.dumps({"username": "other", "email": "other@example.com", "password": "Str0ng-Pass!", "accepted_tos": True, "accepted_age": True}),
             content_type="application/json",
         )
         resp = self.client.get(f"/api/monitors/{created['id']}")
