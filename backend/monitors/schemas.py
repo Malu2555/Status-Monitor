@@ -82,6 +82,12 @@ class MaintenanceOut(Schema):
     note: str
 
 
+class MaintenanceIn(Schema):
+    starts_at: datetime
+    ends_at: datetime
+    note: str = ""
+
+
 class BucketOut(Schema):
     bucket: str
     up_ratio: float

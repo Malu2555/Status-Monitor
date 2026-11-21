@@ -16,6 +16,9 @@ export const monitorRegions = (id, hours = 24) => apiFetch(`/monitors/${id}/regi
 
 export const monitorSsl = (id) => apiFetch(`/monitors/${id}/ssl`)
 
+export const listIncidents = (id, limit = 20, offset = 0) =>
+  apiFetch(`/monitors/${id}/incidents?limit=${limit}&offset=${offset}`)
+
 // Public, unauthenticated
 export const publicMonitors = () => apiFetch('/public/monitors', { auth: false })
 

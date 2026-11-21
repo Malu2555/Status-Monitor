@@ -11,6 +11,10 @@ export const logout = () => apiFetch('/auth/logout', { method: 'POST' })
 
 export const me = () => apiFetch('/auth/me')
 
+// Confirms a signup-verification or pending email-change link.
+export const verifyEmail = (token) =>
+  apiFetch('/auth/verify-email', { method: 'POST', body: { token }, auth: false })
+
 // Opt-in TOTP two-factor authentication.
 export const otpStatus = () => apiFetch('/auth/otp/status')
 export const otpEnroll = () => apiFetch('/auth/otp/enroll', { method: 'POST' })

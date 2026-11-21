@@ -25,6 +25,7 @@ from .schemas import (
     BucketOut,
     HeartbeatOut,
     IncidentOut,
+    MaintenanceIn,
     MaintenanceOut,
     MonitorIn,
     MonitorOut,
@@ -258,6 +259,133 @@ def delete_monitor(request, monitor_id: int):
 def monitor_stats(request, monitor_id: int, hours: int = 24):
     monitor = _owned_or_404(request, monitor_id)
     return uptime_stats(monitor, hours=min(max(hours, 1), 720))
+
+
+# --------------------------------------------------------------------------
+# Incident history
+# --------------------------------------------------------------------------
+@router.get(
+    "/{monitor_id}/incidents",
+    response=list[IncidentOut],
+    throttle=[MonitorAuthThrottle("200/h")],
+    url_name="monitor_incidents",
+)
+def monitor_incidents(request, monitor_id: int, limit: int = 20, offset: int = 0):
+    """Paged incident history for the dashboard timeline (newest first)."""
+    monitor = _owned_or_404(request, monitor_id)
+    limit = min(max(limit, 1), 100)
+    offset = max(offset, 0)
+    incidents = monitor.incidents.all().order_by("-started_at")[offset : offset + limit]
+    return [
+        IncidentOut(
+            id=incident.pk,
+            started_at=incident.started_at,
+            ended_at=incident.ended_at,
+            checks_down=incident.checks_down,
+            last_status_code=incident.last_status_code,
+            postmortem=incident.postmortem,
+        )
+        for incident in incidents
+    ]
+
+
+# --------------------------------------------------------------------------
+# Maintenance windows (planned downtime suppresses alerts)
+# --------------------------------------------------------------------------
+def _window_out(monitor, window) -> MaintenanceOut:
+    return MaintenanceOut(
+        id=window.pk,
+        monitor_id=monitor.pk,
+        monitor_name=monitor.name,
+        starts_at=window.starts_at,
+        ends_at=window.ends_at,
+        note=window.note,
+    )
+
+
+@router.get(
+    "/{monitor_id}/maintenance",
+    response=list[MaintenanceOut],
+    throttle=[MonitorAuthThrottle("200/h")],
+    url_name="monitor_maintenance_list",
+)
+def monitor_maintenance_list(request, monitor_id: int):
+    monitor = _owned_or_404(request, monitor_id)
+    return [
+        _window_out(monitor, window)
+        for window in monitor.maintenance_windows.order_by("starts_at")
+    ]
+
+
+@router.post(
+    "/{monitor_id}/maintenance",
+    response={201: MaintenanceOut},
+    throttle=[MonitorAuthThrottle("60/h")],
+    url_name="monitor_maintenance_create",
+)
+def monitor_maintenance_create(request, monitor_id: int, payload: MaintenanceIn):
+    monitor = _owned_or_404(request, monitor_id)
+    _require_write(request)
+    if payload.ends_at <= payload.starts_at:
+        raise HttpError(422, "The window must end after it starts.")
+    if (payload.ends_at - payload.starts_at).total_seconds() > 30 * 86400:
+        raise HttpError(422, "Maintenance windows are limited to 30 days.")
+    conflict = monitor.maintenance_windows.filter(
+        starts_at__lt=payload.ends_at, ends_at__gt=payload.starts_at
+    ).first()
+    if conflict is not None:
+        raise HttpError(422, f"That overlaps an existing window (id {conflict.pk}).")
+    window = MaintenanceWindow.objects.create(
+        monitor=monitor,
+        starts_at=payload.starts_at,
+        ends_at=payload.ends_at,
+        note=(payload.note or "").strip()[:200],
+    )
+    logger.info(
+        "maintenance window created: monitor=%s id=%s user=%s",
+        monitor.pk,
+        window.pk,
+        request.auth.username,
+    )
+    audit_log(
+        request,
+        "monitor.maintenance_created",
+        user=request.auth,
+        monitor_id=monitor.pk,
+        window_id=window.pk,
+    )
+    return 201, _window_out(monitor, window)
+
+
+@router.delete(
+    "/{monitor_id}/maintenance/{window_id}",
+    response={204: None},
+    throttle=[MonitorAuthThrottle("60/h")],
+    url_name="monitor_maintenance_delete",
+)
+def monitor_maintenance_delete(request, monitor_id: int, window_id: int):
+    monitor = _owned_or_404(request, monitor_id)
+    _require_write(request)
+    window = monitor.maintenance_windows.filter(pk=window_id).first()
+    if window is None:
+        raise HttpError(404, "Maintenance window not found.")
+    if window.starts_at <= timezone.now():
+        raise HttpError(400, "That window has already started — cancel it in the admin.")
+    window.delete()
+    logger.info(
+        "maintenance window deleted: monitor=%s id=%s user=%s",
+        monitor.pk,
+        window_id,
+        request.auth.username,
+    )
+    audit_log(
+        request,
+        "monitor.maintenance_deleted",
+        user=request.auth,
+        monitor_id=monitor.pk,
+        window_id=window_id,
+    )
+    return 204, None
 
 
 @router.get(

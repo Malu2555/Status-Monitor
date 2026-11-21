@@ -2,6 +2,7 @@
 // Private dashboard: monitor CRUD + uptime chart + plan usage/billing.
 import { computed, onMounted, ref } from 'vue'
 import * as monitorsApi from '../api/monitors'
+import IncidentTimeline from '../components/IncidentTimeline.vue'
 import MonitorCard from '../components/MonitorCard.vue'
 import MonitorForm from '../components/MonitorForm.vue'
 import UptimeChart from '../components/UptimeChart.vue'
@@ -219,6 +220,8 @@ onMounted(load)
           · expected every {{ detail.monitor.check_interval_seconds }}s
           (+{{ detail.monitor.heartbeat_grace_seconds }}s grace)
         </p>
+
+        <IncidentTimeline :monitor-id="detail.monitor.id" />
       </div>
     </div>
   </div>

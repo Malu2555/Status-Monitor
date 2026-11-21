@@ -28,7 +28,9 @@ def create_access_token(user) -> str:
         "sub": str(user.pk),
         "type": "access",
         "jti": uuid.uuid4().hex,
-        "iat": now,
+        # Sub-second precision so "invalidate tokens issued before X" can never
+        # accidentally kill a token minted a millisecond later.
+        "iat": now.timestamp(),
         "exp": now + settings.ACCESS_TOKEN_LIFETIME,
     }
     return jwt.encode(payload, settings.JWT_SIGNING_KEY, algorithm=ALGORITHM)
@@ -40,7 +42,7 @@ def create_refresh_token(user) -> str:
         "sub": str(user.pk),
         "type": "refresh",
         "jti": uuid.uuid4().hex,
-        "iat": now,
+        "iat": now.timestamp(),
         "exp": now + settings.REFRESH_TOKEN_LIFETIME,
     }
     return jwt.encode(payload, settings.JWT_SIGNING_KEY, algorithm=ALGORITHM)
@@ -69,9 +71,18 @@ def user_from_payload(payload: dict):
     from .models import User
 
     try:
-        return User.objects.get(pk=int(payload["sub"]), is_active=True)
+        user = User.objects.get(pk=int(payload["sub"]), is_active=True)
     except (User.DoesNotExist, KeyError, TypeError, ValueError):
         return None
+    if user.tokens_invalid_before is not None:
+        issued = payload.get("iat")
+        try:
+            issued_at = datetime.fromtimestamp(float(issued), tz=UTC)
+        except (TypeError, ValueError, OSError, OverflowError):
+            return None
+        if issued_at < user.tokens_invalid_before:
+            return None
+    return user
 
 
 def issue_token_pair(user):
@@ -171,11 +182,11 @@ def prune_blacklist() -> None:
 # --------------------------------------------------------------------------
 # Account lifecycle: verification + password reset tokens
 # --------------------------------------------------------------------------
-def issue_account_token(user, purpose: str) -> AccountActionToken:
+def issue_account_token(user, purpose: str, payload: dict | None = None) -> AccountActionToken:
     """Create a single-use token; supersedes any unspent token of the same purpose."""
     ttl = (
         settings.VERIFY_EMAIL_TOKEN_TTL
-        if purpose == "verify_email"
+        if purpose in ("verify_email", "email_change")
         else settings.PASSWORD_RESET_TOKEN_TTL
     )
     AccountActionToken.objects.filter(user=user, purpose=purpose, consumed_at=None).delete()
@@ -183,12 +194,13 @@ def issue_account_token(user, purpose: str) -> AccountActionToken:
         id=secrets.token_urlsafe(32),
         user=user,
         purpose=purpose,
+        payload=payload or {},
         expires_at=dj_timezone.now() + ttl,
     )
 
 
-def consume_account_token(token_id: str, purpose: str):
-    """Redeem a token; returns the owning user or None when invalid/expired/used."""
+def consume_account_token_record(token_id: str, purpose: str):
+    """Redeem a token; returns the AccountActionToken row or None when unusable."""
     try:
         token = AccountActionToken.objects.select_related("user").get(
             id=token_id,
@@ -200,7 +212,13 @@ def consume_account_token(token_id: str, purpose: str):
         return None
     token.consumed_at = dj_timezone.now()
     token.save(update_fields=["consumed_at"])
-    return token.user
+    return token
+
+
+def consume_account_token(token_id: str, purpose: str):
+    """Redeem a token; returns the owning user or None when invalid/expired/used."""
+    record = consume_account_token_record(token_id, purpose)
+    return record.user if record is not None else None
 
 
 def send_verification_email(user) -> None:
@@ -452,3 +470,77 @@ def enable_user(user) -> int:
 def is_staff(user) -> bool:
     """True when the authenticated principal may moderate other accounts."""
     return bool(user is not None and getattr(user, "is_staff", False))
+
+
+# --------------------------------------------------------------------------
+# Self-service account management (password / email / sessions / deletion)
+# --------------------------------------------------------------------------
+def change_password(user, current_password: str, new_password: str) -> bool:
+    """Rotate the password and invalidate every existing session.
+
+    Returns False when ``current_password`` is wrong. Every token issued before
+    now stops working, so the caller should hand back a fresh pair to keep the
+    current session alive.
+    """
+    if not user.check_password(current_password):
+        return False
+    user.set_password(new_password)
+    user.tokens_invalid_before = dj_timezone.now()
+    user.save(update_fields=["password", "tokens_invalid_before"])
+    return True
+
+
+def invalidate_sessions(user) -> None:
+    """Refuse every token issued before now ("log out everywhere")."""
+    user.tokens_invalid_before = dj_timezone.now()
+    user.save(update_fields=["tokens_invalid_before"])
+
+
+def request_email_change(user, new_email: str) -> None:
+    """Send a confirmation link to the *new* address; the old one stays active."""
+    token = issue_account_token(user, "email_change", {"new_email": new_email})
+    link = f"{settings.FRONTEND_URL}/verify-email?token={token.id}"
+    send_mail(
+        "Confirm your new Status Monitor email",
+        f"Hi {user.username},\n\nConfirm your new email address:\n{link}\n\n"
+        f"This link expires in 24 hours. Until you confirm it, {user.email} "
+        "stays active.\n",
+        settings.DEFAULT_FROM_EMAIL,
+        [new_email],
+        fail_silently=False,
+    )
+
+
+def soft_delete_account(user) -> int:
+    """Anonymise PII, disable the account and pause its monitors.
+
+    Monitoring rows stay owned by the (now anonymous) account so incidents and
+    invoices remain auditable; a future purge job can hard-delete after 30 days.
+    Returns the number of monitors paused.
+    """
+    from monitors.models import Monitor
+
+    from .models import ApiToken, RecoveryCode
+
+    paused_ids = list(
+        Monitor.objects.filter(owner=user, is_active=True).values_list("id", flat=True)
+    )
+    if paused_ids:
+        Monitor.objects.filter(id__in=paused_ids).update(is_active=False)
+
+    now = dj_timezone.now()
+    user.username = f"deleted-{user.pk}"
+    user.email = f"{user.pk}@deleted.invalid"
+    user.first_name = ""
+    user.last_name = ""
+    user.set_unusable_password()
+    user.is_active = False
+    user.disabled_reason = "self_deleted"
+    user.disabled_at = now
+    user.paused_monitor_ids = paused_ids
+    user.tokens_invalid_before = now
+    user.save()
+
+    ApiToken.objects.filter(user=user, revoked_at__isnull=True).update(revoked_at=now)
+    RecoveryCode.objects.filter(user=user).delete()
+    return len(paused_ids)

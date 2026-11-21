@@ -10,7 +10,7 @@ from typing import cast
 
 from django.conf import settings
 from django.contrib.auth import authenticate
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
 from ninja import Router
 from ninja.errors import HttpError
@@ -27,6 +27,9 @@ from .schemas import (
     ApiTokenCreatedOut,
     ApiTokenIn,
     ApiTokenOut,
+    ChangeEmailIn,
+    ChangePasswordIn,
+    DeleteAccountIn,
     LoginIn,
     MessageOut,
     ModerationIn,
@@ -184,17 +187,120 @@ def me(request):
 
 
 # --------------------------------------------------------------------------
+# Self-service account management
+# --------------------------------------------------------------------------
+@router.post(
+    "/change-password",
+    auth=AuthBearer(),
+    response=TokenOut,
+    throttle=[SessionAuthThrottle("5/m")],
+    url_name="change_password",
+)
+def change_password(request, payload: ChangePasswordIn):
+    if not auth_services.change_password(
+        request.auth, payload.current_password, payload.new_password
+    ):
+        abuse.note_failure(_client_ip(request), "password_change")
+        raise HttpError(400, "Current password is incorrect.")
+    logger.info("password changed: user=%s", request.auth.username)
+    audit_log(request, "auth.password_changed", user=request.auth)
+    # Every old token is now invalid; hand this session a fresh pair.
+    access, refresh = auth_services.issue_token_pair(request.auth)
+    response = JsonResponse(auth_services.token_response(request.auth, access))
+    _set_auth_cookies(response, refresh)
+    return response
+
+
+@router.post(
+    "/change-email",
+    auth=AuthBearer(),
+    response=MessageOut,
+    throttle=[SessionAuthThrottle("5/m")],
+    url_name="change_email",
+)
+def change_email(request, payload: ChangeEmailIn):
+    user = cast(User, request.auth)
+    if not user.check_password(payload.current_password):
+        raise HttpError(400, "Current password is incorrect.")
+    if payload.new_email == user.email:
+        raise HttpError(400, "That is already your email address.")
+    if User.objects.filter(email=payload.new_email).exclude(pk=user.pk).exists():
+        raise HttpError(400, "That email is already registered.")
+    try:
+        auth_services.request_email_change(user, payload.new_email)
+    except Exception:
+        logger.exception("email-change message failed: user=%s", user.pk)
+        raise HttpError(503, "Could not send the confirmation email.") from None
+    logger.info("email change requested: user=%s", user.username)
+    audit_log(request, "auth.email_change_requested", user=user, new_email=payload.new_email)
+    return {"detail": "Confirmation link sent to the new address."}
+
+
+@router.post(
+    "/sessions/revoke-others",
+    auth=AuthBearer(),
+    response=TokenOut,
+    throttle=[SessionAuthThrottle("10/m")],
+    url_name="revoke_other_sessions",
+)
+def revoke_other_sessions(request):
+    auth_services.invalidate_sessions(request.auth)
+    logger.info("all other sessions revoked: user=%s", request.auth.username)
+    audit_log(request, "auth.sessions_revoked", user=request.auth)
+    access, refresh = auth_services.issue_token_pair(request.auth)
+    response = JsonResponse(auth_services.token_response(request.auth, access))
+    _set_auth_cookies(response, refresh)
+    return response
+
+
+@router.delete(
+    "/me",
+    auth=AuthBearer(),
+    response={204: None},
+    throttle=[SessionAuthThrottle("3/h")],
+    url_name="delete_me",
+)
+def delete_me(request, payload: DeleteAccountIn):
+    """Self-service account deletion: anonymise PII, disable, pause monitors."""
+    if not request.auth.check_password(payload.current_password):
+        raise HttpError(400, "Current password is incorrect.")
+    username = request.auth.username
+    paused = auth_services.soft_delete_account(request.auth)
+    logger.warning("account self-deleted: user=%s paused_monitors=%s", username, paused)
+    audit_log(request, "auth.account_self_deleted", user=request.auth, monitors_paused=paused)
+    response = HttpResponse(status=204)
+    auth_services.clear_app_cookies(response)
+    return response
+
+
+# --------------------------------------------------------------------------
 # Account lifecycle: email verification, password reset, opt-in 2FA
 # --------------------------------------------------------------------------
 @router.post("/verify-email", response=MessageOut, throttle=AUTH_THROTTLE, url_name="verify_email")
 def verify_email(request, payload: VerifyEmailIn):
-    user = auth_services.consume_account_token(payload.token, "verify_email")
-    if user is None:
-        raise HttpError(400, "Invalid or expired verification link.")
+    record = auth_services.consume_account_token_record(payload.token, "verify_email")
+    changed = False
+    if record is None:
+        # A pending email change is confirmed through the same link.
+        record = auth_services.consume_account_token_record(payload.token, "email_change")
+        if record is None:
+            raise HttpError(400, "Invalid or expired verification link.")
+        changed = True
+
+    user = record.user
+    if changed:
+        new_email = (record.payload or {}).get("new_email", "")
+        if new_email:
+            user.email = new_email
+        audit_kind = "auth.email_changed"
+        logger.info("email changed: user=%s", user.username)
+    else:
+        audit_kind = "auth.email_verified"
+        logger.info("email verified: user=%s", user.username)
+
     user.email_verified = True
-    user.save(update_fields=["email_verified"])
-    logger.info("email verified: user=%s", user.username)
-    audit_log(request, "auth.email_verified", user=user)
+    user.save(update_fields=["email", "email_verified"])
+    audit_log(request, audit_kind, user=user)
     return {"detail": "Email verified."}
 
 

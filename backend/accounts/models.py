@@ -25,11 +25,14 @@ class User(AbstractUser):
             ("tos_violation", "Terms violation"),
             ("abuse", "Abuse / scanning"),
             ("chargeback", "Chargeback"),
+            ("self_deleted", "Self-deleted"),
         ],
     )
     disabled_at = models.DateTimeField(null=True, blank=True)
     # Monitors auto-paused by moderation — resumed when the account is re-enabled.
     paused_monitor_ids = models.JSONField(default=list, blank=True)
+    # "Log out everywhere": tokens issued before this instant are refused.
+    tokens_invalid_before = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return self.username
@@ -105,7 +108,8 @@ class AccountActionToken(models.Model):
         on_delete=models.CASCADE,
         related_name="account_tokens",
     )
-    purpose = models.CharField(max_length=24)  # "verify_email" | "password_reset"
+    purpose = models.CharField(max_length=24)  # "verify_email" | "password_reset" | "email_change"
+    payload = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
     consumed_at = models.DateTimeField(null=True, blank=True)

@@ -23,6 +23,11 @@ const routes = [
     component: () => import('../views/RegisterView.vue'),
   },
   {
+    path: '/verify-email',
+    name: 'verify-email',
+    component: () => import('../views/VerifyEmailView.vue'),
+  },
+  {
     path: '/terms',
     name: 'terms',
     component: () => import('../views/LegalView.vue'),
@@ -50,6 +55,24 @@ const routes = [
     path: '/status-pages',
     name: 'statuspages',
     component: () => import('../views/StatusPagesView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/notifications',
+    name: 'notifications',
+    component: () => import('../views/NotificationsView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/maintenance',
+    name: 'maintenance',
+    component: () => import('../views/MaintenanceView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/account',
+    name: 'account',
+    component: () => import('../views/AccountView.vue'),
     meta: { requiresAuth: true },
   },
 ]

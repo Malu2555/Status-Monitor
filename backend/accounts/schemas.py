@@ -109,6 +109,29 @@ class ApiTokenCreatedOut(Schema):
     scope: str
 
 
+class ChangePasswordIn(Schema):
+    current_password: str
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+class ChangeEmailIn(Schema):
+    new_email: str
+    current_password: str
+
+    @field_validator("new_email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        try:
+            validate_email(value)
+        except ValidationError as exc:
+            raise ValueError("Enter a valid email address.") from exc
+        return value.lower()
+
+
+class DeleteAccountIn(Schema):
+    current_password: str
+
+
 class PolicyOut(Schema):
     slug: str
     version: str

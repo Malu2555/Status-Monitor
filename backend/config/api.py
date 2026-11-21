@@ -20,6 +20,7 @@ from monitors.admin_api import router as admin_run_router
 from monitors.api import public_router
 from monitors.api import router as monitors_router
 from monitors.statuspages_api import router as statuspages_router
+from notifications.api import router as notifications_router
 
 api = NinjaAPI(
     title="Status Monitor API",
@@ -32,6 +33,7 @@ api.add_router("/auth", auth_router)
 api.add_router("/policies", policy_router)
 api.add_router("/monitors", monitors_router)
 api.add_router("/statuspages", statuspages_router)
+api.add_router("/notifications", notifications_router)
 api.add_router("/admin/run", admin_run_router)
 api.add_router("/public", public_router)
 api.add_router("/billing", billing_router)

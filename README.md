@@ -138,16 +138,29 @@ monitor limit and minimum check interval update immediately.
   matching management command. Staff JWT only, throttled at 2/min per user, so
   an external scheduler can drive the minute jobs on a host without a cron
   add-on (`.github/workflows/cron.yml` is the ready-made template).
+- **Account self-service** — change password (invalidates every other session),
+  change email (confirmed by a link sent to the *new* address), sign out all
+  other sessions, and delete your own account (PII anonymised, monitors paused).
+- **Notification channels UI** — users add/pause/delete their own email,
+  webhook, Slack, Discord and Telegram channels at `/notifications`, with a
+  **Test** button that dispatches a synthetic message.
+- **Maintenance windows UI** — schedule planned downtime at `/maintenance`;
+  checks that fail inside the window do not open incidents or alert.
+- **Incident history UI** — the dashboard detail panel lists past incidents
+  (duration, failed checks, last HTTP code) with the generated postmortem.
 
 ## Tests
 
 ```powershell
 cd backend
 .venv\Scripts\python manage.py test     # auth + 2FA + recovery codes, ToS consent,
-                                        # moderation disable/enable, honeypot + IP blocking,
-                                        # cron-over-HTTP triggers, CSRF, refresh rotation,
-                                        # SSRF, plan limits, Polar webhook signature/idempotency,
-                                        # check engine, TLS state, multi-region, status pages
+                                        # account self-service (password/email/sessions/delete),
+                                        # notification channels UI, maintenance windows,
+                                        # incident history, moderation disable/enable,
+                                        # honeypot + IP blocking, cron-over-HTTP triggers,
+                                        # CSRF, refresh rotation, SSRF, plan limits,
+                                        # Polar webhook signature/idempotency, check engine,
+                                        # TLS state, multi-region, status pages
 ```
 
 ## Production notes
