@@ -28,3 +28,16 @@ export function statusLabel(status) {
   // Human name for the API's status value.
   return { up: 'Operational', down: 'Down', unknown: 'Pending' }[status] ?? 'Unknown'
 }
+
+export function kindLabel(kind) {
+  // Human name for a monitor type.
+  return (
+    {
+      http: 'HTTP',
+      heartbeat: 'Heartbeat',
+      keyword: 'Keyword',
+      domain: 'Domain expiry',
+      broken_links: 'Broken links',
+    }[kind] ?? kind ?? 'HTTP'
+  )
+}

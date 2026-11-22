@@ -13,11 +13,13 @@
     "lint:oxlint": "oxlint . --fix",
     "lint:eslint": "eslint . --fix --cache",
     "api:gen": "node scripts/gen-api.mjs",
+    "audit:mobile": "node scripts/mobile-audit.mjs",
     "postinstall": "npm run api:gen",
     "prebuild": "npm run api:gen",
     "format": "prettier --write --experimental-cli src/"
   },
   "dependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
     "chart.js": "^4.5.1",
     "pinia": "^4.0.3",
     "vue": "^3.5.42",

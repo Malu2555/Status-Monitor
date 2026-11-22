@@ -1,4 +1,5 @@
 """Notification outbox: enqueue on monitor state transitions, deliver via channels."""
+
 import logging
 
 from django.db import transaction
@@ -9,9 +10,7 @@ from .models import MonitorNotificationChannel, NotificationDelivery
 logger = logging.getLogger("notifications")
 
 
-def enqueue_state_transition(
-    monitor, previous_status: str, new_status: str, check_info: dict | None = None
-) -> int:
+def enqueue_state_transition(monitor, previous_status: str, new_status: str, check_info: dict | None = None) -> int:
     """Queue one delivery per enabled channel when a monitor changes state.
 
     A first-ever successful check (unknown → up) is deliberately silent, and
@@ -90,6 +89,61 @@ def deliver_pending(batch: int = 50, max_attempts: int = 8) -> tuple[int, int, i
             row.save(update_fields=["attempts", "status", "last_error", "sent_at"])
     logger.info("notification delivery pass: sent=%d failed=%d dead=%d", sent, failed, dead)
     return sent, failed, dead
+
+
+def enqueue_domain_alert(monitor, days_remaining: int, level: str) -> int:
+    """Queue one domain-expiry alert per enabled channel.
+
+    Like the TLS sweep, the caller only invokes this when the alert level
+    changes so customers aren't reminded every day.
+    """
+    channels = list(MonitorNotificationChannel.objects.filter(monitor=monitor, enabled=True))
+    if not channels:
+        return 0
+    NotificationDelivery.objects.bulk_create(
+        [
+            NotificationDelivery(
+                monitor=monitor,
+                channel=channel,
+                event_kind="domain",
+                payload={"days_remaining": days_remaining, "level": level},
+            )
+            for channel in channels
+        ]
+    )
+    logger.info(
+        "notifications enqueued: monitor=%s domain level=%s days=%s channels=%d",
+        monitor.pk,
+        level,
+        days_remaining,
+        len(channels),
+    )
+    return len(channels)
+
+
+def enqueue_broken_links_alert(monitor, count: int, samples: list[dict]) -> int:
+    """Queue one 'new broken links' alert per enabled channel."""
+    channels = list(MonitorNotificationChannel.objects.filter(monitor=monitor, enabled=True))
+    if not channels:
+        return 0
+    NotificationDelivery.objects.bulk_create(
+        [
+            NotificationDelivery(
+                monitor=monitor,
+                channel=channel,
+                event_kind="broken_links",
+                payload={"count": count, "samples": samples[:5]},
+            )
+            for channel in channels
+        ]
+    )
+    logger.info(
+        "notifications enqueued: monitor=%s broken_links=%s channels=%d",
+        monitor.pk,
+        count,
+        len(channels),
+    )
+    return len(channels)
 
 
 def enqueue_ssl_alert(monitor, days_remaining: int, level: str) -> int:

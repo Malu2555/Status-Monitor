@@ -1,4 +1,5 @@
 """Phase 2 features: multi-region reporting, TLS state, custom status pages."""
+
 import json
 from typing import Any
 
@@ -12,26 +13,26 @@ class Phase2ApiTests(TestCase):
         resp = self.client.post(
             "/api/auth/register",
             data=json.dumps(
-                {"username": "p2user", "email": "p2@example.com", "password": "Str0ng-Pass!", "accepted_tos": True, "accepted_age": True}
+                {
+                    "username": "p2user",
+                    "email": "p2@example.com",
+                    "password": "Str0ng-Pass!",
+                    "accepted_tos": True,
+                    "accepted_age": True,
+                }
             ),
             content_type="application/json",
         )
         self.access = resp.json()["access"]
         self.user_id = resp.json()["user"]["id"]
-        self.monitor = Monitor.objects.create(
-            name="Site", url="https://example.com", owner_id=self.user_id
-        )
+        self.monitor = Monitor.objects.create(name="Site", url="https://example.com", owner_id=self.user_id)
 
     def _auth(self) -> dict[str, Any]:
         return {"HTTP_AUTHORIZATION": f"Bearer {self.access}"}
 
     def test_regions_endpoint_reports_per_region(self):
-        Check.objects.create(
-            monitor=self.monitor, is_up=True, status_code=200, response_ms=12, region="eu-west"
-        )
-        Check.objects.create(
-            monitor=self.monitor, is_up=False, status_code=503, response_ms=20, region="us-east"
-        )
+        Check.objects.create(monitor=self.monitor, is_up=True, status_code=200, response_ms=12, region="eu-west")
+        Check.objects.create(monitor=self.monitor, is_up=False, status_code=503, response_ms=20, region="us-east")
         resp = self.client.get(f"/api/monitors/{self.monitor.pk}/regions", **self._auth())
         self.assertEqual(resp.status_code, 200)
         regions = {row["region"]: row for row in resp.json()}

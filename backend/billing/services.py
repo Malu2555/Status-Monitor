@@ -15,8 +15,9 @@ import hashlib
 import hmac
 import logging
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from django.conf import settings

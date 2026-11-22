@@ -1,6 +1,16 @@
 from django.contrib import admin
 
-from .models import Check, Incident, MaintenanceWindow, Monitor, SslCertificate, StatusPage
+from .models import (
+    BrokenLink,
+    Check,
+    CrawlRun,
+    DomainRegistration,
+    Incident,
+    MaintenanceWindow,
+    Monitor,
+    SslCertificate,
+    StatusPage,
+)
 
 
 @admin.register(Monitor)
@@ -46,3 +56,27 @@ class StatusPageAdmin(admin.ModelAdmin):
     search_fields = ("title", "slug", "owner__username")
     prepopulated_fields = {"slug": ("title",)}
     filter_horizontal = ("monitors",)
+
+
+@admin.register(DomainRegistration)
+class DomainRegistrationAdmin(admin.ModelAdmin):
+    list_display = ("monitor", "domain", "expires_at", "days_remaining", "status", "alert_level")
+    list_filter = ("status", "alert_level")
+    search_fields = ("domain", "monitor__name")
+    readonly_fields = ("checked_at",)
+
+
+@admin.register(CrawlRun)
+class CrawlRunAdmin(admin.ModelAdmin):
+    list_display = ("monitor", "started_at", "finished_at", "pages_crawled", "broken_count")
+    list_filter = ("monitor",)
+    search_fields = ("monitor__name",)
+    readonly_fields = ("started_at",)
+
+
+@admin.register(BrokenLink)
+class BrokenLinkAdmin(admin.ModelAdmin):
+    list_display = ("monitor", "target_url", "status_code", "last_seen_at", "resolved_at")
+    list_filter = ("monitor", "resolved_at")
+    search_fields = ("target_url", "source_url", "monitor__name")
+    readonly_fields = ("first_seen_at", "last_seen_at")

@@ -80,7 +80,7 @@ onMounted(async () => {
 <template>
   <div class="container">
     <p class="text-sm text-muted">
-      <router-link :to="{ name: 'public' }">← Back to status</router-link>
+      <router-link :to="{ name: 'home' }">← Back to home</router-link>
     </p>
 
     <div v-if="loading" class="empty-state mt-6">Loading…</div>

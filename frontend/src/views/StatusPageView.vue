@@ -5,7 +5,7 @@ import { onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import * as monitorsApi from '../api/monitors'
 import StatusBadge from '../components/StatusBadge.vue'
-import { formatMs, formatUptime, timeAgo } from '../utils/format'
+import { formatMs, formatUptime, kindLabel, timeAgo } from '../utils/format'
 
 const route = useRoute()
 const page = ref(null)
@@ -46,12 +46,15 @@ onMounted(load)
           <div class="flex justify-between items-start gap-2">
             <div class="flex-1 truncate">
               <h3 class="font-semibold truncate">{{ m.name }}</h3>
-              <a :href="m.url" target="_blank" rel="noopener" class="text-xs text-muted truncate">{{ m.url }}</a>
+              <p class="text-xs text-muted">{{ kindLabel(m.kind) }}</p>
+              <a :href="m.url" target="_blank" rel="noopener" class="text-xs text-muted truncate monitor-url">{{ m.url }}</a>
             </div>
             <StatusBadge :status="m.last_status" />
           </div>
           <div class="flex justify-between text-xs text-muted mt-3 flex-wrap gap-2">
-            <span>Response <strong>{{ formatMs(m.last_response_ms) }}</strong></span>
+            <span v-if="['http', 'keyword'].includes(m.kind)">
+              Response <strong>{{ formatMs(m.last_response_ms) }}</strong>
+            </span>
             <span>Checked <strong>{{ timeAgo(m.last_checked_at) }}</strong></span>
             <span>Uptime 24h <strong>{{ formatUptime(m.uptime_24h) }}</strong></span>
           </div>

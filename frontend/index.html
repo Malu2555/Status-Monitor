@@ -2,14 +2,42 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Public website status page — check the availability of monitored sites, free for anyone." />
-    <title>Status Monitor</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#10b981" />
+    <script>
+      // Apply the stored/system theme before first paint (no light flash).
+      ;(() => {
+        try {
+          const stored = localStorage.getItem('sm-theme') || 'system'
+          const dark = window.matchMedia('(prefers-color-scheme: dark)').matches
+          const theme = stored === 'system' ? (dark ? 'dark' : 'light') : stored
+          document.documentElement.dataset.theme = theme
+          document.documentElement.style.colorScheme = theme
+          const meta = document.querySelector('meta[name="theme-color"]')
+          if (meta) meta.setAttribute('content', theme === 'dark' ? '#0b1220' : '#10b981')
+        } catch {
+          document.documentElement.dataset.theme = 'light'
+        }
+      })()
+    </script>
+    <meta
+      name="description"
+      content="Monitor uptime, SSL certificates, broken links, and cron jobs from around the world. Get alerted in seconds."
+    />
+    <meta property="og:title" content="Status Monitor — All-in-One Website & Uptime Monitoring" />
+    <meta
+      property="og:description"
+      content="Uptime, SSL and domain expiry, broken links, cron jobs and status pages. Get alerted in seconds."
+    />
+    <meta property="og:type" content="website" />
+    <title>Status Monitor — Website & Uptime Monitoring</title>
   </head>
   <body>
     <div id="app"></div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
+
 

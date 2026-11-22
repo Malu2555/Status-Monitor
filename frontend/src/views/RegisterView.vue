@@ -1,12 +1,17 @@
 <script setup>
 // Registration form → auth store → dashboard.
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { logger } from '../utils/logger'
 
 const auth = useAuthStore()
 const router = useRouter()
+const route = useRoute()
+
+const incomingUrl = computed(() =>
+  typeof route.query.url === 'string' ? route.query.url : '',
+)
 
 const username = ref('')
 const email = ref('')
@@ -38,7 +43,10 @@ async function submit() {
       accepted_age: acceptedAge.value,
       company: company.value,
     })
-    router.push({ name: 'dashboard' })
+    router.push({
+      name: 'dashboard',
+      query: incomingUrl.value ? { url: incomingUrl.value } : {},
+    })
   } catch (e) {
     error.value = e.message || 'Registration failed.'
     logger.warn('registration failed', error.value)
@@ -53,6 +61,9 @@ async function submit() {
     <div class="card auth-card p-6">
       <h1 class="text-xl font-bold">Create your account</h1>
       <p class="text-sm text-muted mt-1 mb-4">Free plan: 1 monitor with 5-minute checks.</p>
+      <p v-if="incomingUrl" class="text-xs text-muted mb-4">
+        We'll add <strong class="text-text">{{ incomingUrl }}</strong> to your dashboard right after you sign up.
+      </p>
       <div v-if="error" class="error-box mb-4">{{ error }}</div>
       <form @submit.prevent="submit">
         <div class="field">

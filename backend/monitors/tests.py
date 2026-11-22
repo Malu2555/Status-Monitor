@@ -1,4 +1,5 @@
 """Monitor API + check-engine tests."""
+
 import json
 from typing import Any
 from unittest.mock import patch
@@ -33,7 +34,15 @@ class MonitorApiTests(TestCase):
     def setUp(self):
         resp = self.client.post(
             "/api/auth/register",
-            data=json.dumps({"username": "monuser", "email": "mon@example.com", "password": "Str0ng-Pass!", "accepted_tos": True, "accepted_age": True}),
+            data=json.dumps(
+                {
+                    "username": "monuser",
+                    "email": "mon@example.com",
+                    "password": "Str0ng-Pass!",
+                    "accepted_tos": True,
+                    "accepted_age": True,
+                }
+            ),
             content_type="application/json",
         )
         self.access = resp.json()["access"]
@@ -93,7 +102,15 @@ class MonitorApiTests(TestCase):
         # second user must not see or touch it
         self.client.post(
             "/api/auth/register",
-            data=json.dumps({"username": "other", "email": "other@example.com", "password": "Str0ng-Pass!", "accepted_tos": True, "accepted_age": True}),
+            data=json.dumps(
+                {
+                    "username": "other",
+                    "email": "other@example.com",
+                    "password": "Str0ng-Pass!",
+                    "accepted_tos": True,
+                    "accepted_age": True,
+                }
+            ),
             content_type="application/json",
         )
         resp = self.client.get(f"/api/monitors/{created['id']}")
@@ -104,8 +121,9 @@ class MonitorApiTests(TestCase):
     def test_run_check_records_result(self):
         created = self._create({"name": "Site", "url": "https://example.com"}).json()
         monitor = Monitor.objects.get(pk=created["id"])
-        with patch("monitors.services.httpx.Client", FakeClient), patch(
-            "monitors.services.validate_target_url", side_effect=lambda url: url
+        with (
+            patch("monitors.services.httpx.Client", FakeClient),
+            patch("monitors.services.validate_target_url", side_effect=lambda url: url),
         ):
             result = run_check(monitor)
         self.assertTrue(result["is_up"])
@@ -115,8 +133,9 @@ class MonitorApiTests(TestCase):
 
     def test_run_checks_command(self):
         created = self._create({"name": "Site", "url": "https://example.com"}).json()
-        with patch("monitors.services.httpx.Client", FakeClient), patch(
-            "monitors.services.validate_target_url", side_effect=lambda url: url
+        with (
+            patch("monitors.services.httpx.Client", FakeClient),
+            patch("monitors.services.validate_target_url", side_effect=lambda url: url),
         ):
             call_command("run_checks")
         monitor = Monitor.objects.get(pk=created["id"])

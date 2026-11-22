@@ -1,5 +1,5 @@
 """Staff-only HTTP triggers for the periodic management commands."""
-import json
+
 
 from django.test import TestCase
 
@@ -11,9 +11,7 @@ from monitors.models import Monitor
 
 class AdminRunTests(TestCase):
     def setUp(self):
-        self.staff = User.objects.create_user(
-            "ops", "ops@example.com", "Str0ng-Pass!", is_staff=True
-        )
+        self.staff = User.objects.create_user("ops", "ops@example.com", "Str0ng-Pass!", is_staff=True)
         self.user = User.objects.create_user("plain", "plain@example.com", "Str0ng-Pass!")
         self.staff_token = create_access_token(self.staff)
         self.user_token = create_access_token(self.user)
@@ -23,12 +21,18 @@ class AdminRunTests(TestCase):
     def _auth(self, token):
         return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
 
-    def test_index_lists_the_three_jobs(self):
+    def test_index_lists_the_periodic_jobs(self):
         resp = self.client.get("/api/admin/run", **self._auth(self.staff_token))
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(
             {job["name"] for job in resp.json()},
-            {"run-checks", "deliver-notifications", "check-ssl"},
+            {
+                "run-checks",
+                "deliver-notifications",
+                "check-ssl",
+                "check-domains",
+                "crawl-links",
+            },
         )
 
     def test_index_requires_staff(self):
@@ -37,10 +41,14 @@ class AdminRunTests(TestCase):
         self.assertEqual(resp.status_code, 403)
 
     def test_non_staff_cannot_trigger_jobs(self):
-        for path in ("run-checks", "deliver-notifications", "check-ssl"):
-            resp = self.client.post(
-                f"/api/admin/run/{path}", **self._auth(self.user_token)
-            )
+        for path in (
+            "run-checks",
+            "deliver-notifications",
+            "check-ssl",
+            "check-domains",
+            "crawl-links",
+        ):
+            resp = self.client.post(f"/api/admin/run/{path}", **self._auth(self.user_token))
             self.assertEqual(resp.status_code, 403, path)
 
     def test_run_checks_returns_output_and_audits(self):
@@ -52,9 +60,7 @@ class AdminRunTests(TestCase):
         self.assertTrue(AuditLogEntry.objects.filter(kind="admin.run_job").exists())
 
     def test_deliver_notifications_reports_counts(self):
-        resp = self.client.post(
-            "/api/admin/run/deliver-notifications", **self._auth(self.staff_token)
-        )
+        resp = self.client.post("/api/admin/run/deliver-notifications", **self._auth(self.staff_token))
         self.assertEqual(resp.status_code, 200)
         self.assertIn("sent=0", resp.json()["output"])
 

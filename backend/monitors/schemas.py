@@ -10,8 +10,12 @@ class MonitorIn(Schema):
     name: str = Field(min_length=1, max_length=100)
     url: str = ""
     is_public: bool = True
-    check_interval_seconds: int = Field(default=300, ge=60, le=3600)
-    kind: str = Field(default="http", pattern="^(http|heartbeat)$")
+    check_interval_seconds: int = Field(default=300, ge=60, le=604800)
+    kind: str = Field(
+        default="http",
+        pattern="^(http|heartbeat|keyword|domain|broken_links)$",
+    )
+    config: dict = Field(default_factory=dict)
     heartbeat_grace_seconds: int = Field(default=300, ge=60, le=86400)
 
 
@@ -20,7 +24,8 @@ class MonitorUpdateIn(Schema):
     url: str | None = None
     is_public: bool | None = None
     is_active: bool | None = None
-    check_interval_seconds: int | None = Field(default=None, ge=60, le=3600)
+    check_interval_seconds: int | None = Field(default=None, ge=60, le=604800)
+    config: dict | None = None
     heartbeat_grace_seconds: int | None = Field(default=None, ge=60, le=86400)
 
 
@@ -35,6 +40,7 @@ class MonitorOut(ModelSchema):
             "is_active",
             "check_interval_seconds",
             "kind",
+            "config",
             "heartbeat_token",
             "heartbeat_grace_seconds",
             "last_ping_at",
@@ -49,6 +55,7 @@ class PublicMonitorOut(Schema):
     id: int
     name: str
     url: str
+    kind: str = "http"
     last_status: str
     last_status_code: int | None = None
     last_response_ms: int | None = None
@@ -118,6 +125,42 @@ class SslOut(Schema):
     error: str
     alert_level: str
     checked_at: datetime | None = None
+
+
+class DomainOut(Schema):
+    domain: str
+    expires_at: datetime | None = None
+    days_remaining: int | None = None
+    registrar: str = ""
+    status: str = ""
+    error: str = ""
+    alert_level: str = ""
+    checked_at: datetime | None = None
+
+
+class BrokenLinkOut(Schema):
+    id: int
+    source_url: str
+    target_url: str
+    status_code: int | None = None
+    error: str = ""
+    first_seen_at: datetime
+    last_seen_at: datetime
+
+
+class CrawlRunOut(Schema):
+    id: int
+    started_at: datetime
+    finished_at: datetime | None = None
+    pages_crawled: int
+    links_checked: int
+    broken_count: int
+    error: str = ""
+
+
+class CrawlReportOut(Schema):
+    run: CrawlRunOut | None = None
+    broken_links: list[BrokenLinkOut] = []
 
 
 class StatusPageOut(Schema):

@@ -22,14 +22,13 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         monitors = list(Monitor.objects.filter(is_active=True))
+        # Domain-expiry and broken-link monitors run from their own daily
+        # commands (RDAP sweeps and crawls are far too heavy for every minute).
+        monitors = [monitor for monitor in monitors if monitor.kind not in ("domain", "broken_links")]
         if not options["force"]:
             # Heartbeat monitors are always evaluated (they compare ping age),
-            # HTTP monitors only when their own interval has elapsed.
-            monitors = [
-                monitor
-                for monitor in monitors
-                if monitor.kind == "heartbeat" or should_check(monitor)
-            ]
+            # HTTP/keyword monitors only when their own interval has elapsed.
+            monitors = [monitor for monitor in monitors if monitor.kind == "heartbeat" or should_check(monitor)]
 
         for monitor in monitors:
             if monitor.kind == "heartbeat":

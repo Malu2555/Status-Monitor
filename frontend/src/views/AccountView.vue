@@ -89,7 +89,7 @@ async function deleteAccount() {
     await accountApi.deleteAccount({ current_password: deleteForm.current_password })
     logger.warn('account deleted')
     auth.clear()
-    router.push({ name: 'public' })
+    router.push({ name: 'home' })
   } catch (e) {
     error.value = e.message
   } finally {

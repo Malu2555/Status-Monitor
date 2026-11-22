@@ -4,8 +4,15 @@ import { useAuthStore } from '../stores/auth'
 const routes = [
   {
     path: '/',
-    name: 'public',
+    name: 'home',
+    component: () => import('../views/LandingView.vue'),
+    meta: { landing: true, title: 'All-in-One Website & Uptime Monitoring' },
+  },
+  {
+    path: '/status',
+    name: 'status',
     component: () => import('../views/PublicStatusView.vue'),
+    meta: { title: 'Live status' },
   },
   {
     path: '/p/:slug',
@@ -80,6 +87,15 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes,
+  scrollBehavior(to, from, savedPosition) {
+    if (savedPosition) return savedPosition
+    if (to.hash) return { el: to.hash, behavior: 'smooth', top: 84 }
+    return { top: 0 }
+  },
+})
+
+router.afterEach((to) => {
+  document.title = to.meta.title ? `${to.meta.title} · Status Monitor` : 'Status Monitor'
 })
 
 // Auth guard: bootstraps the session once (silent refresh via httpOnly cookie),

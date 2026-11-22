@@ -232,6 +232,10 @@ SELF_MONITOR_NAME = os.environ.get("SELF_MONITOR_NAME", "Status Monitor").strip(
 CHECK_TIMEOUT_SECONDS = 10
 # Max redirects followed, with SSRF re-validation on every hop.
 CHECK_MAX_REDIRECTS = 5
+# Keyword checks only inspect this much of the response body.
+CHECK_MAX_BODY_BYTES = int(os.environ.get("CHECK_MAX_BODY_BYTES", "524288"))
+# Broken-link crawls stop after this many seconds (keeps HTTP cron windows sane).
+CRAWL_MAX_SECONDS = int(os.environ.get("CRAWL_MAX_SECONDS", "45"))
 
 # --------------------------------------------------------------------------
 # Polar.sh billing (merchant of record: handles global tax/VAT for us)
@@ -256,6 +260,9 @@ FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
 REGION_NAME = os.environ.get("REGION_NAME", "local").strip() or "local"
 SSL_WARN_DAYS = int(os.environ.get("SSL_WARN_DAYS", "30"))
 SSL_CRITICAL_DAYS = int(os.environ.get("SSL_CRITICAL_DAYS", "7"))
+# Domain registration expiry alert thresholds (days remaining).
+DOMAIN_WARN_DAYS = int(os.environ.get("DOMAIN_WARN_DAYS", "30"))
+DOMAIN_CRITICAL_DAYS = int(os.environ.get("DOMAIN_CRITICAL_DAYS", "7"))
 
 # --------------------------------------------------------------------------
 # Logging — our apps log at INFO to the console; framework noise stays WARNING+.

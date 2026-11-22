@@ -4,6 +4,7 @@ HTTP status codes: 200 OK · 201 created · 204 deleted · 400 plan limit ·
 401 missing/invalid access token · 404 not found / not owned ·
 422 URL rejected (scheme, SSRF) or interval below plan minimum · 429 rate limited.
 """
+
 import csv
 import html
 import io
@@ -11,6 +12,7 @@ import logging
 import secrets
 from datetime import timedelta
 
+from django.conf import settings
 from django.http import HttpResponse
 from django.utils import timezone
 from ninja import Router, Status
@@ -20,9 +22,19 @@ from accounts.auth import ApiKeyAuth, AuthBearer
 from audit.services import audit_log
 from config.throttling import MonitorAuthThrottle, PublicAnonThrottle
 
-from .models import Incident, MaintenanceWindow, Monitor, StatusPage
+from .models import (
+    DomainRegistration,
+    Incident,
+    MaintenanceWindow,
+    Monitor,
+    StatusPage,
+)
 from .schemas import (
+    BrokenLinkOut,
     BucketOut,
+    CrawlReportOut,
+    CrawlRunOut,
+    DomainOut,
     HeartbeatOut,
     IncidentOut,
     MaintenanceIn,
@@ -41,7 +53,7 @@ from .schemas import (
 from .services import (
     bulk_uptime,
     draft_postmortem,
-    evaluate_heartbeat,
+    normalize_domain,
     record_heartbeat_ping,
     regional_statuses,
     uptime_stats,
@@ -65,6 +77,68 @@ def _require_write(request) -> None:
     """Reject mutations made with a read-only API token."""
     if getattr(request, "api_token_scope", "write") == "read":
         raise HttpError(403, "This API token is read-only.")
+
+
+SLOW_KINDS = ("domain", "broken_links")
+
+
+def _clean_config(kind: str, config: dict | None, url: str) -> tuple[dict, str]:
+    """Validate/normalize type-specific config; returns (config, display_url)."""
+    cleaned = dict(config or {})
+    if len(str(cleaned)) > 4000:
+        raise HttpError(422, "Monitor settings are too large.")
+
+    if kind in ("http", "keyword", "broken_links"):
+        try:
+            url = validate_target_url(url)
+        except ValueError as exc:
+            raise HttpError(422, str(exc)) from exc
+
+    if kind == "keyword":
+        phrase = str(cleaned.get("keyword", "")).strip()
+        if not phrase or len(phrase) > 500:
+            raise HttpError(422, "A keyword between 1 and 500 characters is required.")
+        match = str(cleaned.get("match", "contains")).lower()
+        if match not in ("contains", "not_contains"):
+            raise HttpError(422, "Keyword match must be 'contains' or 'not_contains'.")
+        return {
+            "keyword": phrase,
+            "match": match,
+            "case_sensitive": bool(cleaned.get("case_sensitive", False)),
+        }, url
+
+    if kind == "domain":
+        try:
+            domain = normalize_domain(str(cleaned.get("domain") or url))
+        except ValueError as exc:
+            raise HttpError(422, str(exc)) from exc
+        return {"domain": domain}, f"https://{domain}"
+
+    if kind == "broken_links":
+        try:
+            max_pages = int(cleaned.get("max_pages", 25))
+            max_depth = int(cleaned.get("max_depth", 2))
+        except (TypeError, ValueError) as exc:
+            raise HttpError(422, "Crawl limits must be numbers.") from exc
+        return {
+            "max_pages": min(max(max_pages, 1), 100),
+            "max_depth": min(max(max_depth, 1), 3),
+            "check_images": bool(cleaned.get("check_images", False)),
+            "check_external": bool(cleaned.get("check_external", False)),
+        }, url
+
+    return {}, url
+
+
+def _interval_for(kind: str, requested: int, minimum: int) -> int:
+    """Apply per-kind interval floors (daily sweeps for domain/crawl)."""
+    if kind in SLOW_KINDS and requested < 3600:
+        requested = 86400
+    if requested < minimum:
+        raise HttpError(422, f"Your plan requires a minimum check interval of {minimum}s.")
+    if kind in SLOW_KINDS and requested < 3600:
+        raise HttpError(422, "This monitor type requires an interval of at least 1 hour.")
+    return requested
 
 
 # --------------------------------------------------------------------------
@@ -109,24 +183,23 @@ def create_monitor(request, payload: MonitorIn):
     ok, reason = can_add_monitor(request.auth)
     if not ok:
         raise HttpError(400, reason)
-    minimum = min_interval(request.auth)
-    if payload.check_interval_seconds < minimum:
-        raise HttpError(422, f"Your plan requires a minimum check interval of {minimum}s.")
+    interval = _interval_for(payload.kind, payload.check_interval_seconds, min_interval(request.auth))
 
     if payload.kind == "heartbeat":
         url = ""
+        config = {}
         heartbeat_token = secrets.token_urlsafe(24)
     else:
         try:
-            url = validate_target_url(payload.url)
-        except ValueError as exc:
+            config, url = _clean_config(payload.kind, payload.config, payload.url)
+        except HttpError as exc:
             logger.warning(
-                "monitor url rejected: user=%s url=%s (%s)",
+                "monitor config rejected: user=%s kind=%s (%s)",
                 request.auth.username,
-                payload.url,
-                exc,
+                payload.kind,
+                str(exc),
             )
-            raise HttpError(422, str(exc)) from exc
+            raise
         heartbeat_token = None
 
     monitor = Monitor.objects.create(
@@ -134,8 +207,9 @@ def create_monitor(request, payload: MonitorIn):
         name=payload.name.strip(),
         url=url,
         is_public=payload.is_public,
-        check_interval_seconds=payload.check_interval_seconds,
+        check_interval_seconds=interval,
         kind=payload.kind,
+        config=config,
         heartbeat_token=heartbeat_token,
         heartbeat_grace_seconds=payload.heartbeat_grace_seconds,
     )
@@ -212,7 +286,19 @@ def update_monitor(request, monitor_id: int, payload: MonitorUpdateIn):
     monitor = _owned_or_404(request, monitor_id)
     _require_write(request)
     updates = payload.model_dump(exclude_unset=True)
-    if updates.get("url") and monitor.kind == "http":
+    if "config" in updates or ("url" in updates and monitor.kind == "domain"):
+        try:
+            config, clean_url = _clean_config(
+                monitor.kind,
+                updates.get("config", monitor.config),
+                updates.get("url", monitor.url),
+            )
+        except HttpError as exc:
+            raise HttpError(422, str(exc)) from exc
+        updates["config"] = config
+        if monitor.kind == "domain":
+            updates["url"] = clean_url
+    if updates.get("url") and monitor.kind in ("http", "keyword", "broken_links"):
         try:
             updates["url"] = validate_target_url(updates["url"])
         except ValueError as exc:
@@ -220,9 +306,14 @@ def update_monitor(request, monitor_id: int, payload: MonitorUpdateIn):
     if "check_interval_seconds" in updates:
         from billing.services import min_interval
 
-        minimum = min_interval(request.auth)
-        if updates["check_interval_seconds"] < minimum:
-            raise HttpError(422, f"Your plan requires a minimum check interval of {minimum}s.")
+        value = updates["check_interval_seconds"]
+        if monitor.kind in SLOW_KINDS and value < 3600:
+            raise HttpError(422, "This monitor type requires an interval of at least 1 hour.")
+        if value < min_interval(request.auth):
+            raise HttpError(
+                422,
+                f"Your plan requires a minimum check interval of {min_interval(request.auth)}s.",
+            )
     for field, value in updates.items():
         setattr(monitor, field, value)
     monitor.save()
@@ -237,7 +328,9 @@ def update_monitor(request, monitor_id: int, payload: MonitorUpdateIn):
     return monitor
 
 
-@router.delete("/{monitor_id}", response={204: None}, throttle=[MonitorAuthThrottle("100/h")], url_name="monitor_delete")
+@router.delete(
+    "/{monitor_id}", response={204: None}, throttle=[MonitorAuthThrottle("100/h")], url_name="monitor_delete"
+)
 def delete_monitor(request, monitor_id: int):
     monitor = _owned_or_404(request, monitor_id)
     _require_write(request)
@@ -311,10 +404,7 @@ def _window_out(monitor, window) -> MaintenanceOut:
 )
 def monitor_maintenance_list(request, monitor_id: int):
     monitor = _owned_or_404(request, monitor_id)
-    return [
-        _window_out(monitor, window)
-        for window in monitor.maintenance_windows.order_by("starts_at")
-    ]
+    return [_window_out(monitor, window) for window in monitor.maintenance_windows.order_by("starts_at")]
 
 
 @router.post(
@@ -330,9 +420,7 @@ def monitor_maintenance_create(request, monitor_id: int, payload: MaintenanceIn)
         raise HttpError(422, "The window must end after it starts.")
     if (payload.ends_at - payload.starts_at).total_seconds() > 30 * 86400:
         raise HttpError(422, "Maintenance windows are limited to 30 days.")
-    conflict = monitor.maintenance_windows.filter(
-        starts_at__lt=payload.ends_at, ends_at__gt=payload.starts_at
-    ).first()
+    conflict = monitor.maintenance_windows.filter(starts_at__lt=payload.ends_at, ends_at__gt=payload.starts_at).first()
     if conflict is not None:
         raise HttpError(422, f"That overlaps an existing window (id {conflict.pk}).")
     window = MaintenanceWindow.objects.create(
@@ -429,6 +517,107 @@ def monitor_ssl(request, monitor_id: int):
     )
 
 
+def _crawl_report(monitor: Monitor) -> CrawlReportOut:
+    run = monitor.crawl_runs.first()
+    links = monitor.broken_links.filter(resolved_at__isnull=True)[:200]
+    return CrawlReportOut(
+        run=(
+            CrawlRunOut(
+                id=run.pk,
+                started_at=run.started_at,
+                finished_at=run.finished_at,
+                pages_crawled=run.pages_crawled,
+                links_checked=run.links_checked,
+                broken_count=run.broken_count,
+                error=run.error,
+            )
+            if run
+            else None
+        ),
+        broken_links=[
+            BrokenLinkOut(
+                id=link.pk,
+                source_url=link.source_url,
+                target_url=link.target_url,
+                status_code=link.status_code,
+                error=link.error,
+                first_seen_at=link.first_seen_at,
+                last_seen_at=link.last_seen_at,
+            )
+            for link in links
+        ],
+    )
+
+
+@router.get(
+    "/{monitor_id}/domain",
+    response=DomainOut,
+    throttle=[MonitorAuthThrottle("60/h")],
+    url_name="monitor_domain",
+)
+def monitor_domain(request, monitor_id: int):
+    """Latest RDAP registration state for a domain-expiry monitor."""
+    monitor = _owned_or_404(request, monitor_id)
+    if monitor.kind != "domain":
+        raise HttpError(400, "This monitor is not a domain-expiry monitor.")
+    domain = (monitor.config or {}).get("domain") or monitor.url
+    record = DomainRegistration.objects.filter(monitor=monitor).first()
+    if record is None:
+        return DomainOut(
+            domain=normalize_domain(domain),
+            status="unknown",
+            error="Not checked yet — run manage.py check_domains.",
+        )
+    return DomainOut(
+        domain=record.domain,
+        expires_at=record.expires_at,
+        days_remaining=record.days_remaining,
+        registrar=record.registrar,
+        status=record.status,
+        error=record.error,
+        alert_level=record.alert_level,
+        checked_at=record.checked_at,
+    )
+
+
+@router.get(
+    "/{monitor_id}/crawl",
+    response=CrawlReportOut,
+    throttle=[MonitorAuthThrottle("120/h")],
+    url_name="monitor_crawl",
+)
+def monitor_crawl(request, monitor_id: int):
+    """Latest broken-link crawl summary + still-open dead links."""
+    monitor = _owned_or_404(request, monitor_id)
+    if monitor.kind != "broken_links":
+        raise HttpError(400, "This monitor is not a broken-link monitor.")
+    return _crawl_report(monitor)
+
+
+@router.post(
+    "/{monitor_id}/crawl/run",
+    response=CrawlReportOut,
+    throttle=[MonitorAuthThrottle("10/h")],
+    url_name="monitor_crawl_run",
+)
+def monitor_crawl_run(request, monitor_id: int):
+    """Run a broken-link crawl immediately (rate-limited)."""
+    monitor = _owned_or_404(request, monitor_id)
+    _require_write(request)
+    if monitor.kind != "broken_links":
+        raise HttpError(400, "This monitor is not a broken-link monitor.")
+    from .crawling import crawl_monitor
+
+    crawl_monitor(monitor, max_seconds=min(settings.CRAWL_MAX_SECONDS, 30))
+    audit_log(
+        request,
+        "monitor.crawl_run",
+        user=request.auth,
+        monitor_id=monitor.pk,
+    )
+    return _crawl_report(monitor)
+
+
 @router.post(
     "/{monitor_id}/incidents/{incident_id}/postmortem",
     response=PostmortemOut,
@@ -472,6 +661,7 @@ def public_monitors(request):
             id=monitor.pk,
             name=monitor.name,
             url=monitor.url,
+            kind=monitor.kind,
             last_status=monitor.last_status,
             last_status_code=monitor.last_status_code,
             last_response_ms=monitor.last_response_ms,
@@ -500,6 +690,7 @@ def public_monitor_detail(request, monitor_id: int):
         id=monitor.pk,
         name=monitor.name,
         url=monitor.url,
+        kind=monitor.kind,
         last_status=monitor.last_status,
         last_status_code=monitor.last_status_code,
         last_response_ms=monitor.last_response_ms,
@@ -578,6 +769,7 @@ def public_statuspage(request, slug: str):
                 id=monitor.pk,
                 name=monitor.name,
                 url=monitor.url,
+                kind=monitor.kind,
                 last_status=monitor.last_status,
                 last_status_code=monitor.last_status_code,
                 last_response_ms=monitor.last_response_ms,
@@ -611,7 +803,8 @@ def public_badge(request, monitor_id: int):
         '<rect width="220" height="20" rx="3" fill="#111827"/>'
         f'<rect x="150" width="70" height="20" rx="3" fill="{color}"/>'
         f'<text x="8" y="14" fill="#f3f4f6" font-family="Verdana,sans-serif" font-size="11">{name}</text>'
-        f'<text x="185" y="14" fill="#ffffff" font-family="Verdana,sans-serif" font-size="11" text-anchor="middle">{label}</text>'
+        f'<text x="185" y="14" fill="#ffffff" font-family="Verdana,sans-serif" '
+        f'font-size="11" text-anchor="middle">{label}</text>'
         "</svg>"
     )
     response = HttpResponse(svg, content_type="image/svg+xml")
@@ -628,9 +821,7 @@ def public_badge(request, monitor_id: int):
 )
 def public_heartbeat(request, token: str):
     """Inbound ping for heartbeat (cron-job) monitors."""
-    monitor = Monitor.objects.filter(
-        heartbeat_token=token, is_active=True, kind="heartbeat"
-    ).first()
+    monitor = Monitor.objects.filter(heartbeat_token=token, is_active=True, kind="heartbeat").first()
     if monitor is None:
         raise HttpError(404, "Unknown heartbeat.")
     record_heartbeat_ping(monitor)

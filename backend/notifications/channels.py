@@ -3,6 +3,7 @@
 Supported kinds: email, generic webhook, Slack incoming webhook, Discord
 webhook, and Telegram (address format ``bot_token|chat_id``).
 """
+
 import logging
 
 import httpx
@@ -18,11 +19,17 @@ SUBJECTS = {
 
 
 def _subject(row) -> str:
+    details = row.payload or {}
     if row.event_kind == "ssl":
-        details = row.payload or {}
         level = details.get("level", "warn")
         icon = "🚨" if level == "critical" else "🔒"
         return f"{icon} {row.monitor.name} TLS expires in {details.get('days_remaining')} day(s)"
+    if row.event_kind == "domain":
+        level = details.get("level", "warn")
+        icon = "🚨" if level == "critical" else "🌐"
+        return f"{icon} {row.monitor.name} domain expires in {details.get('days_remaining')} day(s)"
+    if row.event_kind == "broken_links":
+        return f"🔗 {row.monitor.name}: {details.get('count', 1)} new broken link(s)"
     return SUBJECTS.get(row.event_kind, "{name} status change").format(name=row.monitor.name)
 
 
@@ -36,9 +43,19 @@ def _monitor_lines(row) -> list[str]:
     ]
     if row.event_kind == "ssl":
         lines.append(
-            f"TLS certificate expires in {details.get('days_remaining')} day(s) "
-            f"(level: {details.get('level', 'warn')})"
+            f"TLS certificate expires in {details.get('days_remaining')} day(s) (level: {details.get('level', 'warn')})"
         )
+        return lines
+    if row.event_kind == "domain":
+        lines.append(
+            f"Domain expires in {details.get('days_remaining')} day(s) (level: {details.get('level', 'warn')})"
+        )
+        return lines
+    if row.event_kind == "broken_links":
+        lines.append(f"New broken links: {details.get('count', 0)}")
+        for sample in (details.get("samples") or [])[:5]:
+            status = sample.get("status_code") or sample.get("error") or "error"
+            lines.append(f"- {sample.get('target_url', '')} ({status})")
         return lines
     if details.get("status_code") is not None:
         lines.append(f"HTTP status: {details['status_code']}")

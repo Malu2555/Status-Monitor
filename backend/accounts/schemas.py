@@ -1,7 +1,7 @@
-from django.core.exceptions import ValidationError
-from django.core.validators import validate_email
 from datetime import datetime
 
+from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 from ninja import Schema
 from pydantic import Field, field_validator
 

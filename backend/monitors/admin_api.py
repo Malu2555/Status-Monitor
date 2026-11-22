@@ -2,7 +2,8 @@
 
 This lets a free external scheduler (GitHub Actions, cron-job.org, UptimeRobot)
 drive the minute jobs when the host has no cron add-on — plus a manual button
-for when the scheduler itself flakes.
+for when the scheduler itself flakes. Daily jobs cover TLS, domain expiry and
+broken-link crawls.
 
 Every endpoint requires a staff JWT and is throttled, so a leaked token cannot
 burn the database. Intended for small deployments: one request holds a worker
@@ -41,6 +42,18 @@ JOBS = [
         "method": "POST",
         "schedule": "daily (06:00)",
         "description": "Refresh TLS expiry and queue escalated certificate alerts.",
+    },
+    {
+        "name": "check-domains",
+        "method": "POST",
+        "schedule": "daily (06:30)",
+        "description": "Refresh domain registration expiry (RDAP) and queue alerts.",
+    },
+    {
+        "name": "crawl-links",
+        "method": "POST",
+        "schedule": "daily (07:00)",
+        "description": "Crawl due broken-link monitors and queue new-link alerts.",
     },
 ]
 
@@ -96,3 +109,19 @@ def deliver_notifications(request):
 @router.post("/check-ssl", response=RunOut, throttle=JOB_THROTTLE, url_name="admin_check_ssl")
 def check_ssl_job(request, force: bool = False):
     return _run(request, "check_ssl", "check-ssl", force=force)
+
+
+@router.post("/check-domains", response=RunOut, throttle=JOB_THROTTLE, url_name="admin_check_domains")
+def check_domains_job(request, force: bool = False):
+    return _run(request, "check_domains", "check-domains", force=force)
+
+
+@router.post("/crawl-links", response=RunOut, throttle=JOB_THROTTLE, url_name="admin_crawl_links")
+def crawl_links_job(request, limit: int = 0, max_seconds: int = 0):
+    return _run(
+        request,
+        "crawl_links",
+        "crawl-links",
+        limit=max(limit, 0),
+        max_seconds=max(max_seconds, 0),
+    )

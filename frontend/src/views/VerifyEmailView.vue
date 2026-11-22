@@ -51,7 +51,7 @@ onMounted(async () => {
           Go to dashboard
         </router-link>
         <router-link v-else :to="{ name: 'login' }" class="btn btn-primary">Log in</router-link>
-        <router-link :to="{ name: 'public' }" class="btn btn-ghost">Status page</router-link>
+        <router-link :to="{ name: 'status' }" class="btn btn-ghost">Live status</router-link>
       </div>
     </div>
   </div>

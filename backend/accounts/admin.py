@@ -21,7 +21,8 @@ class StatusMonitorUserAdmin(UserAdmin):
     )
     list_filter = ("is_active", "disabled_reason", "is_staff")
     search_fields = ("username", "email")
-    fieldsets = UserAdmin.fieldsets + (
+    fieldsets = (
+        *UserAdmin.fieldsets,
         (
             "Moderation",
             {"fields": ("disabled_reason", "disabled_at")},

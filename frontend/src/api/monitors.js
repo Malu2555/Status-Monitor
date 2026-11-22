@@ -25,3 +25,9 @@ export const publicMonitors = () => apiFetch('/public/monitors', { auth: false }
 export const publicMonitorDetail = (id) => apiFetch(`/public/monitors/${id}`, { auth: false })
 
 export const publicStatusPage = (slug) => apiFetch(`/public/statuspages/${slug}`, { auth: false })
+
+export const monitorDomain = (id) => apiFetch(`/monitors/${id}/domain`)
+
+export const monitorCrawl = (id) => apiFetch(`/monitors/${id}/crawl`)
+
+export const runCrawl = (id) => apiFetch(`/monitors/${id}/crawl/run`, { method: 'POST' })

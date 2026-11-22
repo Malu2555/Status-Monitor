@@ -7,3 +7,7 @@
 # * * * * * cd /path/to/Status_Monitor/backend && /path/to/.venv/bin/python manage.py deliver_notifications >> /var/log/status_monitor_notify.log 2>&1
 # # TLS certificate expiry sweep, once a day at 06:00:
 # 0 6 * * * cd /path/to/Status_Monitor/backend && /path/to/.venv/bin/python manage.py check_ssl >> /var/log/status_monitor_ssl.log 2>&1
+# # Domain registration expiry sweep (RDAP), once a day at 06:30:
+# 30 6 * * * cd /path/to/Status_Monitor/backend && /path/to/.venv/bin/python manage.py check_domains >> /var/log/status_monitor_domains.log 2>&1
+# # Broken-link crawls, once a day at 07:00:
+# 0 7 * * * cd /path/to/Status_Monitor/backend && /path/to/.venv/bin/python manage.py crawl_links >> /var/log/status_monitor_crawl.log 2>&1

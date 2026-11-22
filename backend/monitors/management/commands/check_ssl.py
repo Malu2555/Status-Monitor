@@ -37,7 +37,7 @@ class Command(BaseCommand):
         monitors = [
             m
             for m in Monitor.objects.filter(is_active=True)
-            if m.url.lower().startswith("https://")
+            if m.kind in ("http", "keyword", "broken_links") and m.url.lower().startswith("https://")
         ]
         checked = alerted = 0
         for monitor in monitors:
@@ -68,9 +68,7 @@ class Command(BaseCommand):
             )
             self.stdout.write(f"{monitor.name}: {summary} (level={new_level or 'ok'})")
 
-        self.stdout.write(
-            self.style.SUCCESS(f"Checked {checked} certificate(s); {alerted} alert(s) queued.")
-        )
+        self.stdout.write(self.style.SUCCESS(f"Checked {checked} certificate(s); {alerted} alert(s) queued."))
 
 
 _LEVEL_ORDER = {"": 0, "warn": 1, "critical": 2}

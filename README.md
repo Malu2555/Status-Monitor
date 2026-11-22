@@ -29,11 +29,29 @@ Released under the **MIT licence** — see `LICENSE`.
   region) feed the per-region consensus view at `GET /api/monitors/{id}/regions`.
 - **TLS expiry:** `manage.py check_ssl` (daily) records each https certificate's
   expiry and queues a warning/critical alert through the notification outbox.
+- **Keyword/content monitoring:** `kind="keyword"` asserts that a page contains
+  (or does not contain) a phrase, catching "HTTP 200 but broken" pages.
+- **Domain expiry:** `kind="domain"` reads the registrar expiry via RDAP in
+  `manage.py check_domains` (daily); warns at 30 days and escalates at 7.
+- **Broken links:** `kind="broken_links"` crawls same-site links (robots.txt
+  respected, SSRF-guarded) in `manage.py crawl_links` (daily) and alerts on new
+  dead links. Returns HTTP 4xx/5xx, and the dashboard lists every open one.
 - **Notifications:** email, generic webhook, Slack, Discord and Telegram
   channels, delivered through a retrying outbox (`manage.py deliver_notifications`).
 - **Status pages:** branded public pages (`StatusPage` model + `/p/<slug>` in the
   SPA, backed by `GET /api/public/statuspages/<slug>`) showing a chosen subset
   of monitors.
+- **Marketing site:** the SPA root (`/`) is a landing page (hero URL capture,
+  product preview, features, use cases, pricing); the live public feed lives at
+  `/status`, and the visitor CTA carries the entered URL through registration
+  into the monitor form.
+- **Light/dark theme:** system-preference by default with a manual
+  System → Light → Dark toggle in the navbar. One `<html data-theme>` switch
+  flips the CSS token set; the preference is stored in `localStorage`, applied
+  before first paint (no flash), and Chart.js re-reads the palette on change.
+- **Mobile:** 390px-audited layouts (no horizontal scroll), 44px touch targets,
+  safe-area insets, iOS-zoom-safe inputs, hamburger menu with Escape/outside-tap
+  closing + scroll lock, and a sticky landing CTA on small screens.
 - **Security:** SSRF guard on monitor URLs (public IPs only, redirects
   re-validated per hop), rate limiting (brute-force 5/min, per-IP envelope
   1500/h, public feed 60/min, per-user monitor writes, global cap), security
@@ -59,7 +77,9 @@ backend/            Django project (config/ = settings+api+middleware)
   billing/          Polar checkout/portal/webhook, plan limits
 frontend/           Vue 3 + Vite SPA
   src/api/          fetch client (silent refresh, CSRF header)
-  src/assets/css/   main.css (tokens+reset) · utilities.css (atomic) · components.css
+  src/composables/  useTheme (system/light/dark, persisted, no-FLASH boot)
+  src/assets/css/   main.css (tokens+reset) · utilities.css (atomic) · components.css · landing.css
+  scripts/          gen-api.mjs · mobile-audit.mjs (CDP overflow + tap-target check)
 scripts/            Windows Task Scheduler registration + Linux crontab example
 ```
 
@@ -78,6 +98,9 @@ Copy-Item .env.example .env   # then edit .env (SECRET_KEY, Polar keys…)
 cd frontend
 npm install
 npm run dev          # http://localhost:5173  (proxies /api → :8000)
+
+# Mobile audit (requires Chrome with --remote-debugging-port=9333 and `npm run dev`)
+npm run audit:mobile
 
 # 3. Monitoring every minute (remember the self-monitor 😄)
 powershell -ExecutionPolicy Bypass -File ..\scripts\run_checks_scheduled.ps1
@@ -134,10 +157,10 @@ monitor limit and minimum check interval update immediately.
   Edit `Policy` rows in the admin (or add a new version) and bump
   `TOS_VERSION` so new signups stamp the version they accepted.
 - **Cron over HTTP** — `GET /api/admin/run` lists the jobs and
-  `POST /api/admin/run/{run-checks|deliver-notifications|check-ssl}` runs the
-  matching management command. Staff JWT only, throttled at 2/min per user, so
-  an external scheduler can drive the minute jobs on a host without a cron
-  add-on (`.github/workflows/cron.yml` is the ready-made template).
+  `POST /api/admin/run/{run-checks|deliver-notifications|check-ssl|check-domains|crawl-links}`
+  runs the matching management command. Staff JWT only, throttled at 2/min per
+  user, so an external scheduler can drive the minute jobs on a host without
+  a cron add-on (`.github/workflows/cron.yml` is the ready-made template).
 - **Account self-service** — change password (invalidates every other session),
   change email (confirmed by a link sent to the *new* address), sign out all
   other sessions, and delete your own account (PII anonymised, monitors paused).
@@ -224,9 +247,10 @@ Free-tier path that stays at **$0/month** until you have paying users:
 - **Cron on a host without a cron add-on** (Render free): enable
   `.github/workflows/cron.yml` and set the `API_BASE_URL` + `CRON_JWT`
   repository secrets. It calls the staff-only `/api/admin/run/*` endpoints every
-  minute (`run_checks`, `deliver_notifications`) and daily (`check_ssl`).
+  minute (`run_checks`, `deliver_notifications`) and daily (`check_ssl`,
+  `check_domains`, `crawl_links`).
   On a box with cron/Task Scheduler, use `scripts/crontab.example` or
-  `scripts/run_checks_scheduled.ps1` instead — same three commands.
+  `scripts/run_checks_scheduled.ps1` instead — same five commands.
 - Abuse controls are on by default: 256 KB body cap, registration honeypot
   (`company` field), and automatic 24-hour IP blocks after 50 auth failures in
   an hour. Review and lift blocks in the Django admin (*Blocked IPs*), and watch
