@@ -1,0 +1,78 @@
+# Render blueprint: one Docker web service that also runs the 60s scheduler.
+# Free-plan notes: no cron add-ons, no pre-deploy command, 512MB RAM — so the
+# start command migrates + starts the scheduler + gunicorn (2 workers).
+services:
+  - type: web
+    name: status-monitor-api
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: DEBUG
+        value: "False"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: JWT_SIGNING_KEY
+        generateValue: true
+      - key: SCHEDULER_TOKEN
+        generateValue: true
+      - key: ALLOWED_HOSTS
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: SELF_MONITOR_URL
+        sync: false
+      - key: COOKIE_SECURE
+        value: "True"
+      - key: SECURE_SSL_REDIRECT
+        value: "True"
+      # Render terminates TLS and forwards X-Forwarded-For; trust its proxy so
+      # per-IP rate limiting and auto-blocking don't collapse into one bucket.
+      - key: TRUSTED_PROXY_IPS
+        value: "*"
+      # 1 = Render only; set to 2 when the SPA proxies /api/* through Vercel.
+      - key: PROXY_HOPS
+        value: "1"
+      - key: REGION_NAME
+        value: render
+      # Django admin stays off until you deliberately enable it.
+      - key: ADMIN_ENABLED
+        value: "False"
+      - key: ADMIN_PATH
+        value: "/admin/"
+      - key: ADMIN_IP_ALLOWLIST
+        value: ""
+      - key: ADMIN_ALERT_EMAIL
+        sync: false
+      - key: POLAR_USE_SANDBOX
+        value: "True"
+      - key: POLAR_ACCESS_TOKEN
+        sync: false
+      - key: POLAR_WEBHOOK_SECRET
+        sync: false
+      - key: POLAR_PRODUCT_PRO
+        sync: false
+      - key: POLAR_PRODUCT_BUSINESS
+        sync: false
+      - key: EMAIL_BACKEND
+        value: "django.core.mail.backends.smtp.EmailBackend"
+      - key: EMAIL_HOST
+        sync: false
+      - key: EMAIL_PORT
+        value: "587"
+      - key: EMAIL_HOST_USER
+        sync: false
+      - key: EMAIL_HOST_PASSWORD
+        sync: false
+      - key: EMAIL_USE_TLS
+        value: "True"
+      - key: DEFAULT_FROM_EMAIL
+        sync: false

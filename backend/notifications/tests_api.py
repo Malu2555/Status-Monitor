@@ -21,14 +21,14 @@ class NotificationApiTests(TestCase):
         self.access = create_access_token(self.user)
         self.auth = {"HTTP_AUTHORIZATION": f"Bearer {self.access}"}
 
-    def _create(self, kind="email", address="ops@example.com", monitor_id=None):
+    def _create(self, kind="email", address=None, monitor_id=None):
         return self.client.post(
             "/api/notifications/channels",
             data=json.dumps(
                 {
                     "monitor_id": monitor_id or self.monitor.pk,
                     "kind": kind,
-                    "address": address,
+                    "address": address or self.user.email,
                 }
             ),
             content_type="application/json",

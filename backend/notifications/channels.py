@@ -10,6 +10,8 @@ import httpx
 from django.conf import settings
 from django.core.mail import send_mail
 
+from core.net import safe_post
+
 logger = logging.getLogger("notifications")
 
 SUBJECTS = {
@@ -88,25 +90,15 @@ def _dispatch_webhook(address: str, row) -> None:
         "monitor_url": row.monitor.url,
         **(row.payload or {}),
     }
-    with httpx.Client(timeout=10) as client:
-        response = client.post(
-            address,
-            json=payload,
-            headers={"User-Agent": "StatusMonitor/1.0"},
-        )
-        response.raise_for_status()
+    safe_post(address, json=payload, headers={"User-Agent": "StatusMonitor/1.0"})
 
 
 def _dispatch_slack(address: str, row) -> None:
-    with httpx.Client(timeout=10) as client:
-        response = client.post(address, json={"text": _text(row)})
-        response.raise_for_status()
+    safe_post(address, json={"text": _text(row)})
 
 
 def _dispatch_discord(address: str, row) -> None:
-    with httpx.Client(timeout=10) as client:
-        response = client.post(address, json={"content": _text(row)})
-        response.raise_for_status()
+    safe_post(address, json={"content": _text(row)})
 
 
 def _dispatch_telegram(address: str, row) -> None:

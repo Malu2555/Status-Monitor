@@ -4,6 +4,7 @@ Channels live per (user, monitor). Users can add their own Slack/Discord/Telegra
 webhook or email address, toggle it, delete it, and send a test message without
 waiting for a real outage.
 """
+
 import logging
 from datetime import datetime
 
@@ -16,6 +17,7 @@ from pydantic import Field
 from accounts.auth import AuthBearer
 from audit.services import audit_log
 from config.throttling import MonitorAuthThrottle
+from core.net import validate_target_url
 from monitors.models import Monitor
 
 from .models import MonitorNotificationChannel
@@ -66,7 +68,7 @@ def _serialize(channel) -> dict:
     }
 
 
-def _validate_address(kind: str, address: str) -> str:
+def _validate_address(kind: str, address: str, user) -> str:
     address = address.strip()
     if not address:
         raise HttpError(422, "Address is required.")
@@ -75,12 +77,21 @@ def _validate_address(kind: str, address: str) -> str:
             validate_email(address)
         except ValidationError as exc:
             raise HttpError(422, "Enter a valid email address.") from exc
+        # Prevent the platform from being used as a mail relay: notifications may
+        # only go to the account's own (verified) address.
+        if address.lower() != (user.email or "").lower():
+            raise HttpError(422, "Email notifications can only be sent to your account email.")
     elif kind == "telegram":
         token, _, chat_id = address.partition("|")
         if not token or not chat_id:
             raise HttpError(422, "Telegram address must be 'bot_token|chat_id'.")
-    elif not address.startswith(("http://", "https://")):
-        raise HttpError(422, "Webhook addresses must start with http:// or https://.")
+    else:
+        if not address.startswith(("http://", "https://")):
+            raise HttpError(422, "Webhook addresses must start with http:// or https://.")
+        try:
+            address = validate_target_url(address)
+        except ValueError as exc:
+            raise HttpError(422, str(exc)) from exc
     return address
 
 
@@ -93,9 +104,7 @@ def _owned_monitor(request, monitor_id: int) -> Monitor:
 
 def _owned_channel(request, channel_id: int) -> MonitorNotificationChannel:
     channel = (
-        MonitorNotificationChannel.objects.select_related("monitor")
-        .filter(pk=channel_id, user=request.auth)
-        .first()
+        MonitorNotificationChannel.objects.select_related("monitor").filter(pk=channel_id, user=request.auth).first()
     )
     if channel is None:
         raise HttpError(404, "Notification channel not found.")
@@ -135,10 +144,8 @@ def list_channels(request):
 )
 def create_channel(request, payload: ChannelIn):
     monitor = _owned_monitor(request, payload.monitor_id)
-    address = _validate_address(payload.kind, payload.address)
-    if MonitorNotificationChannel.objects.filter(
-        monitor=monitor, kind=payload.kind, address=address
-    ).exists():
+    address = _validate_address(payload.kind, payload.address, request.auth)
+    if MonitorNotificationChannel.objects.filter(monitor=monitor, kind=payload.kind, address=address).exists():
         raise HttpError(400, "That channel already exists for this monitor.")
     channel = MonitorNotificationChannel.objects.create(
         user=request.auth,
@@ -175,7 +182,7 @@ def update_channel(request, channel_id: int, payload: ChannelUpdateIn):
     channel = _owned_channel(request, channel_id)
     updates = payload.model_dump(exclude_unset=True)
     if updates.get("address") is not None:
-        channel.address = _validate_address(channel.kind, updates["address"])
+        channel.address = _validate_address(channel.kind, updates["address"], request.auth)
     if updates.get("enabled") is not None:
         channel.enabled = updates["enabled"]
     channel.save(update_fields=["address", "enabled"])

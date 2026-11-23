@@ -14,34 +14,11 @@ from django.conf import settings
 from django.db.models import Count, F, Q
 from django.utils import timezone
 
+from core.net import validate_target_url
+
 from .models import Check, DomainRegistration, Incident, MaintenanceWindow, Monitor, SslCertificate
 
 logger = logging.getLogger("monitors")
-
-
-def validate_target_url(url: str) -> str:
-    """Validate a URL is fetchable and not routed to private space (SSRF guard).
-
-    Rules: http/https only; hostname must resolve and every resolved address
-    must be globally routable (private, loopback, link-local, reserved and
-    multicast ranges are rejected).
-    """
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        raise ValueError("Only http:// and https:// URLs are allowed.")
-    host = parsed.hostname
-    if not host:
-        raise ValueError("The URL must include a hostname.")
-    host = host.strip("[]")
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except OSError as exc:
-        raise ValueError("The hostname could not be resolved.") from exc
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if not ip.is_global:
-            raise ValueError("URLs pointing to private, loopback or internal networks are not allowed.")
-    return parsed.geturl()
 
 
 def should_check(monitor: Monitor) -> bool:

@@ -1,0 +1,14 @@
+# Keep secrets, local databases and build artefacts out of the production image.
+.git
+.github
+.venv
+**/__pycache__
+**/*.pyc
+backend/.env
+backend/.env.*
+backend/db.sqlite3
+backend/*.sqlite3
+frontend/node_modules
+frontend/dist
+frontend/.env*
+pyright_report.txt

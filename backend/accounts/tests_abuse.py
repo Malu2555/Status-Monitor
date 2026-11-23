@@ -1,9 +1,10 @@
 """Application-level DoS guard: honeypot, IP blocking, trusted-proxy parsing."""
+
 import json
 from datetime import timedelta
 
 from django.core.cache import cache
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from accounts import abuse
@@ -94,4 +95,31 @@ class TrustedProxyTests(TestCase):
 
     def test_forwarded_header_used_from_trusted_proxy(self):
         request = self._Request({"REMOTE_ADDR": "127.0.0.1", "HTTP_X_FORWARDED_FOR": "1.2.3.4, 5.6.7.8"})
+        self.assertEqual(abuse.client_ip(request), "5.6.7.8")
+
+    def test_spoofed_leading_entry_is_ignored(self):
+        request = self._Request({"REMOTE_ADDR": "127.0.0.1", "HTTP_X_FORWARDED_FOR": "6.6.6.6, 1.2.3.4"})
         self.assertEqual(abuse.client_ip(request), "1.2.3.4")
+
+    def test_hop_count_selects_the_client_behind_two_proxies(self):
+        request = self._Request(
+            {
+                "REMOTE_ADDR": "127.0.0.1",
+                "HTTP_X_FORWARDED_FOR": "6.6.6.6, 1.2.3.4, 10.0.0.1",
+            }
+        )
+        with override_settings(TRUSTED_PROXY_IPS=["*"], PROXY_HOPS=2):
+            self.assertEqual(abuse.client_ip(request), "1.2.3.4")
+
+    def test_wildcard_trusts_any_proxy(self):
+        request = self._Request({"REMOTE_ADDR": "10.0.0.7", "HTTP_X_FORWARDED_FOR": "1.2.3.4"})
+        with override_settings(TRUSTED_PROXY_IPS=["*"]):
+            self.assertEqual(abuse.client_ip(request), "1.2.3.4")
+
+    def test_throttle_identity_matches_trusted_proxy_logic(self):
+        from django.test import RequestFactory
+
+        from config.throttling import GlobalAnonThrottle
+
+        request = RequestFactory().get("/", REMOTE_ADDR="127.0.0.1", HTTP_X_FORWARDED_FOR="6.6.6.6, 1.2.3.4")
+        self.assertEqual(GlobalAnonThrottle("60/min").get_ident(request), "1.2.3.4")

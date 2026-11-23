@@ -4,6 +4,7 @@ HTTP status codes: 200 OK · 201 registered · 400 duplicate username/email ·
 401 bad credentials / missing-expired-revoked refresh token ·
 403 CSRF mismatch (refresh only) · 429 rate limited.
 """
+
 import logging
 import secrets
 from typing import cast
@@ -17,7 +18,12 @@ from ninja.errors import HttpError
 from ninja.throttling import BaseThrottle
 
 from audit.services import audit_log
-from config.throttling import AuthAnonThrottle, SessionAuthThrottle
+from config.throttling import (
+    AuthAnonThrottle,
+    LoginAnonThrottle,
+    RefreshAnonThrottle,
+    SessionAuthThrottle,
+)
 
 from . import abuse
 from . import services as auth_services
@@ -55,7 +61,18 @@ def _client_ip(request) -> str:
     """Best-effort client IP for audit logs (trusted X-Forwarded-For only)."""
     return abuse.client_ip(request)
 
+
+def _audit_ip(request) -> dict:
+    """Raw proxy headers for the debug_proxy command (truncated, non-secret)."""
+    return {
+        "remote": request.META.get("REMOTE_ADDR", "")[:64],
+        "xff": request.META.get("HTTP_X_FORWARDED_FOR", "")[:300],
+    }
+
+
 AUTH_THROTTLE: list[BaseThrottle] = [AuthAnonThrottle("5/m")]
+LOGIN_THROTTLE: list[BaseThrottle] = [LoginAnonThrottle("10/m")]
+REFRESH_THROTTLE: list[BaseThrottle] = [RefreshAnonThrottle("60/m")]
 
 
 def _set_auth_cookies(response, refresh_token: str) -> None:
@@ -80,17 +97,14 @@ def register(request, payload: RegisterIn):
     if not (payload.accepted_tos and payload.accepted_age):
         raise HttpError(
             400,
-            "You must accept the Terms of Service and Privacy Policy and confirm "
-            "that you are at least 16 years old.",
+            "You must accept the Terms of Service and Privacy Policy and confirm that you are at least 16 years old.",
         )
     email = payload.email.lower()
     if User.objects.filter(username=payload.username).exists():
         raise HttpError(400, "That username is already taken.")
     if User.objects.filter(email=email).exists():
         raise HttpError(400, "That email is already registered.")
-    user = User.objects.create_user(
-        username=payload.username, email=email, password=payload.password
-    )
+    user = User.objects.create_user(username=payload.username, email=email, password=payload.password)
     auth_services.record_tos_acceptance(user)
     logger.info("user registered: id=%s username=%s ip=%s", user.pk, user.username, _client_ip(request))
     audit_log(
@@ -101,6 +115,7 @@ def register(request, payload: RegisterIn):
         user_id=user.pk,
         tos_version=user.tos_version,
         age_confirmed=True,
+        **_audit_ip(request),
     )
     try:
         auth_services.send_verification_email(user)
@@ -112,31 +127,37 @@ def register(request, payload: RegisterIn):
     return response
 
 
-@router.post("/login", response=TokenOut, throttle=AUTH_THROTTLE, url_name="login")
+@router.post("/login", response=TokenOut, throttle=LOGIN_THROTTLE, url_name="login")
 def login(request, payload: LoginIn):
+    if abuse.login_locked(payload.username):
+        logger.warning("login locked: username=%s ip=%s", payload.username, _client_ip(request))
+        audit_log(request, "auth.login_locked", user=None, username=payload.username)
+        raise HttpError(429, "Too many failed attempts. Try again later.")
     user = authenticate(request, username=payload.username, password=payload.password)
     if user is None:
         logger.warning("login failed: username=%s ip=%s", payload.username, _client_ip(request))
         abuse.note_failure(_client_ip(request), "login")
-        audit_log(request, "auth.login_failed", user=None, username=payload.username)
+        if abuse.note_login_failure(payload.username):
+            audit_log(request, "auth.login_username_locked", username=payload.username)
+        audit_log(request, "auth.login_failed", user=None, username=payload.username, **_audit_ip(request))
         raise HttpError(401, "Invalid username or password.")
     user = cast(User, user)  # django-stubs: authenticate() -> AbstractBaseUser | None
-    if auth_services.user_otp_enabled(user) and not auth_services.verify_otp_or_recovery(
-        user, payload.otp or ""
-    ):
+    if auth_services.user_otp_enabled(user) and not auth_services.verify_otp_or_recovery(user, payload.otp or ""):
         logger.warning("login otp refused: user=%s ip=%s", user.username, _client_ip(request))
         abuse.note_failure(_client_ip(request), "otp")
+        abuse.note_login_failure(payload.username)
         audit_log(request, "auth.login_otp_failed", user=user, username=user.username)
         raise HttpError(401, "Invalid two-factor code.")
+    abuse.clear_login_failures(payload.username)
     logger.info("login ok: user=%s ip=%s", user.username, _client_ip(request))
-    audit_log(request, "auth.login", user=user, username=user.username)
+    audit_log(request, "auth.login", user=user, username=user.username, **_audit_ip(request))
     access, refresh = auth_services.issue_token_pair(user)
     response = JsonResponse(auth_services.token_response(user, access))
     _set_auth_cookies(response, refresh)
     return response
 
 
-@router.post("/refresh", response=TokenOut, throttle=AUTH_THROTTLE, url_name="refresh")
+@router.post("/refresh", response=TokenOut, throttle=REFRESH_THROTTLE, url_name="refresh")
 def refresh(request):
     token = request.COOKIES.get(settings.COOKIE_REFRESH_NAME)
     if not token:
@@ -197,9 +218,7 @@ def me(request):
     url_name="change_password",
 )
 def change_password(request, payload: ChangePasswordIn):
-    if not auth_services.change_password(
-        request.auth, payload.current_password, payload.new_password
-    ):
+    if not auth_services.change_password(request.auth, payload.current_password, payload.new_password):
         abuse.note_failure(_client_ip(request), "password_change")
         raise HttpError(400, "Current password is incorrect.")
     logger.info("password changed: user=%s", request.auth.username)
@@ -581,9 +600,9 @@ def create_api_token(request, payload: ApiTokenIn):
 def revoke_api_token(request, token_id: int):
     from .models import ApiToken
 
-    updated = ApiToken.objects.filter(
-        pk=token_id, user=request.auth, revoked_at__isnull=True
-    ).update(revoked_at=timezone.now())
+    updated = ApiToken.objects.filter(pk=token_id, user=request.auth, revoked_at__isnull=True).update(
+        revoked_at=timezone.now()
+    )
     if not updated:
         raise HttpError(404, "Token not found.")
     logger.info("api token revoked: user=%s id=%s", request.auth.username, token_id)

@@ -3,6 +3,7 @@ Django settings for the Status Monitor project.
 
 All secrets and configuration come from environment variables (.env file).
 """
+
 import logging
 import os
 import sys
@@ -21,15 +22,24 @@ def env_list(name: str, default: str = "") -> list[str]:
     return [x.strip() for x in os.environ.get(name, default).split(",") if x.strip()]
 
 
+def env_bool(name: str, default: bool = False) -> bool:
+    return os.environ.get(name, str(default)).lower() in ("1", "true", "yes", "on")
+
+
 # --------------------------------------------------------------------------
 # Core
 # --------------------------------------------------------------------------
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-insecure-key")
 DEBUG = os.environ.get("DEBUG", "True").lower() in ("1", "true", "yes")
 ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", "localhost,127.0.0.1")
+# Render injects RENDER_EXTERNAL_HOSTNAME; accept it automatically so a
+# forgotten ALLOWED_HOSTS value doesn't take the service down.
+_render_host = os.environ.get("RENDER_EXTERNAL_HOSTNAME", "").strip()
+if _render_host and _render_host not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(_render_host)
 
 INSTALLED_APPS = [
-    "django.contrib.admin",
+    "config.apps.SecureAdminConfig",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
@@ -52,10 +62,12 @@ MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "config.middleware.SecurityHeadersMiddleware",
     "config.middleware.BlockedIPMiddleware",
+    "config.middleware.AdminGuardMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django_otp.middleware.OTPMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -95,8 +107,7 @@ if _DATABASE_URL:
     _parsed_url = urllib.parse.urlparse(_DATABASE_URL)
     if _parsed_url.scheme not in ("postgres", "postgresql") or not _parsed_url.path.strip("/"):
         raise ImproperlyConfigured(
-            "DATABASE_URL must be a PostgreSQL DSN with a database name, e.g. "
-            "postgres://user:password@host:5432/dbname"
+            "DATABASE_URL must be a PostgreSQL DSN with a database name, e.g. postgres://user:password@host:5432/dbname"
         )
     _query = urllib.parse.parse_qs(_parsed_url.query)
     DATABASES = {
@@ -154,6 +165,7 @@ def _db_endpoint(db_config: dict) -> str:
         return f"postgresql {host}{port}/{db_config['NAME']}"
     return f"sqlite3 {db_config['NAME']}"
 
+
 # --------------------------------------------------------------------------
 # Auth / JWT
 # --------------------------------------------------------------------------
@@ -177,7 +189,44 @@ REFRESH_TOKEN_LIFETIME = timedelta(days=int(os.environ.get("REFRESH_TOKEN_DAYS",
 
 COOKIE_REFRESH_NAME = "sm_refresh"
 COOKIE_CSRF_NAME = "sm_csrf"
-COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "False").lower() in ("1", "true", "yes")
+COOKIE_SECURE = env_bool("COOKIE_SECURE", default=not DEBUG)
+
+# --------------------------------------------------------------------------
+# Admin surface (Django admin is opt-in in production)
+# --------------------------------------------------------------------------
+# Disabled by default when DEBUG=False; enable per-session with ADMIN_ENABLED.
+ADMIN_ENABLED = env_bool("ADMIN_ENABLED", default=DEBUG)
+_admin_path = os.environ.get("ADMIN_PATH", "/admin/").strip().strip("/") or "admin"
+ADMIN_PATH = f"/{_admin_path}/"
+# Optional CIDR allow-list ("*" allows everyone, e.g. when relying on 2FA).
+ADMIN_IP_ALLOWLIST = env_list("ADMIN_IP_ALLOWLIST", "")
+ADMIN_LOGIN_MAX_FAILURES = int(os.environ.get("ADMIN_LOGIN_MAX_FAILURES", "5"))
+ADMIN_LOGIN_LOCK_WINDOW = int(os.environ.get("ADMIN_LOGIN_LOCK_WINDOW", "900"))
+ADMIN_LOGIN_LOCK_SECONDS = int(os.environ.get("ADMIN_LOGIN_LOCK_SECONDS", "3600"))
+ADMIN_LOGIN_DELAY_SECONDS = float(os.environ.get("ADMIN_LOGIN_DELAY_SECONDS", "0.4"))
+ADMIN_RATE_LIMIT_PER_MIN = int(os.environ.get("ADMIN_RATE_LIMIT_PER_MIN", "120"))
+ADMIN_ALERT_EMAIL = os.environ.get("ADMIN_ALERT_EMAIL", "").strip()
+
+# Application login protection (independent of IP, so a shared proxy bucket
+# cannot lock every user out of one username).
+LOGIN_MAX_FAILURES = int(os.environ.get("LOGIN_MAX_FAILURES", "10"))
+LOGIN_LOCK_WINDOW = int(os.environ.get("LOGIN_LOCK_WINDOW", "900"))
+LOGIN_LOCK_SECONDS = int(os.environ.get("LOGIN_LOCK_SECONDS", "600"))
+
+# Health probes stay terse in production; set HEALTH_VERBOSE=True temporarily
+# to expose component failure details to anonymous probes (debugging only).
+HEALTH_VERBOSE = env_bool("HEALTH_VERBOSE", default=DEBUG)
+
+# Short, secure admin sessions (Django's default is two weeks).
+SESSION_COOKIE_AGE = int(os.environ.get("SESSION_COOKIE_AGE", "1800"))
+SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = "Lax"
+SESSION_COOKIE_SECURE = COOKIE_SECURE
+CSRF_COOKIE_SAMESITE = "Lax"
+
+# Shared secret for /api/admin/scheduler/* (container loop + external schedulers).
+SCHEDULER_TOKEN = os.environ.get("SCHEDULER_TOKEN", "").strip()
 
 # Throttling bucket checks are disabled while the test runner is active.
 DISABLE_THROTTLING = "test" in sys.argv
@@ -197,6 +246,8 @@ USE_X_FORWARDED_HOST = os.environ.get("USE_X_FORWARDED_HOST", "False").lower() i
     "yes",
 )
 TRUSTED_PROXY_IPS = env_list("TRUSTED_PROXY_IPS", "127.0.0.1,::1")
+# Number of trusted proxy hops appended to X-Forwarded-For (1 = rightmost).
+PROXY_HOPS = max(int(os.environ.get("PROXY_HOPS", "1")), 1)
 
 # --------------------------------------------------------------------------
 # CORS — credentials allowed, explicit allow-list only (never '*').
@@ -205,9 +256,7 @@ TRUSTED_PROXY_IPS = env_list("TRUSTED_PROXY_IPS", "127.0.0.1,::1")
 # --------------------------------------------------------------------------
 CORS_ALLOW_CREDENTIALS = True
 _DEV_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
-CORS_ALLOWED_ORIGINS = env_list(
-    "CORS_ALLOWED_ORIGINS", ",".join(_DEV_ORIGINS) if DEBUG else ""
-)
+CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS", ",".join(_DEV_ORIGINS) if DEBUG else "")
 if DEBUG:
     for _origin in _DEV_ORIGINS:
         if _origin not in CORS_ALLOWED_ORIGINS:
@@ -247,9 +296,7 @@ POLAR_PRODUCT_IDS = {
     "business": os.environ.get("POLAR_PRODUCT_BUSINESS", ""),
 }
 POLAR_USE_SANDBOX = os.environ.get("POLAR_USE_SANDBOX", "False").lower() in ("1", "true", "yes")
-POLAR_API_BASE = (
-    "https://sandbox-api.polar.sh/v1" if POLAR_USE_SANDBOX else "https://api.polar.sh/v1"
-)
+POLAR_API_BASE = "https://sandbox-api.polar.sh/v1" if POLAR_USE_SANDBOX else "https://api.polar.sh/v1"
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
 
 # --------------------------------------------------------------------------
@@ -320,12 +367,15 @@ TOS_VERSION = os.environ.get("TOS_VERSION", "1.0")
 # Email — console backend for dev; wire a real provider (SMTP/SES/…) when
 # the account-lifecycle milestone lands (see .env.example).
 # --------------------------------------------------------------------------
-EMAIL_BACKEND = os.environ.get(
-    "EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend"
-)
-DEFAULT_FROM_EMAIL = os.environ.get(
-    "DEFAULT_FROM_EMAIL", "Status Monitor <noreply@localhost>"
-)
+EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "Status Monitor <noreply@localhost>")
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "localhost")
+EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "25"))
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", default=False)
+EMAIL_USE_SSL = env_bool("EMAIL_USE_SSL", default=False)
+EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", "10"))
 
 # --------------------------------------------------------------------------
 # Error reporting — Sentry stays a no-op unless SENTRY_DSN is provided.
@@ -364,4 +414,3 @@ if os.environ.get("SECURE_SSL_REDIRECT", "False").lower() in ("1", "true", "yes"
     SECURE_HSTS_SECONDS = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
-

@@ -13,7 +13,7 @@ the option for when you want the same uptime coverage *and* the receipts.
 
 Released under the **MIT licence** — see `LICENSE`.
 
-- **Backend:** Django 6 + Django Ninja (auto OpenAPI docs at `/api/docs`)
+- **Backend:** Django 6 + Django Ninja (OpenAPI schema generated in dev)
 - **Frontend:** Vue 3 + Vite + vanilla CSS (design tokens + utilities + components)
 - **Auth:** JWT — access token held in memory; refresh token in an **httpOnly,
   SameSite=Strict cookie** (`path=/api/auth`), rotated on every refresh with
@@ -22,9 +22,10 @@ Released under the **MIT licence** — see `LICENSE`.
 - **Billing:** Polar.sh subscriptions (merchant of record) — Free (1 monitor,
   5-min checks), Pro ($9/mo, 10 monitors, 1-min), Business ($29/mo, 50
   monitors, 1-min)
-- **Monitoring:** `manage.py run_checks` — schedule it every minute via
-  cron/Task Scheduler; it checks every monitor whose interval has elapsed and
-  evaluates heartbeat monitors against their last inbound ping.
+- **Monitoring:** `manage.py run_scheduler` (container) or `manage.py run_checks`
+  (cron/Task Scheduler). It checks every monitor whose interval has elapsed and
+  evaluates heartbeat monitors against their last inbound ping. The container
+  loop also runs `deliver_notifications` every minute and the daily sweeps.
   Each `Check` is stamped with `REGION_NAME`, so several runners (one per
   region) feed the per-region consensus view at `GET /api/monitors/{id}/regions`.
 - **TLS expiry:** `manage.py check_ssl` (daily) records each https certificate's
@@ -55,8 +56,9 @@ Released under the **MIT licence** — see `LICENSE`.
 - **Security:** SSRF guard on monitor URLs (public IPs only, redirects
   re-validated per hop), rate limiting (brute-force 5/min, per-IP envelope
   1500/h, public feed 60/min, per-user monitor writes, global cap), security
-  headers (CSP, nosniff, frame-deny, referrer), explicit CORS allow-list with
-  credentials
+  headers (CSP, nosniff, frame-deny, referrer, permissions-policy), explicit
+  CORS allow-list with credentials, and an opt-in Django admin that requires a
+  superuser + TOTP, with lockout and optional IP allow-listing.
 - **DoS guard:** application-layer — 256 KB body cap, honeypot field on
   registration, `BlockedIP` table (manual + automatic after 50 auth failures
   from one IP in an hour) enforced by middleware before routing, and
@@ -71,15 +73,19 @@ Released under the **MIT licence** — see `LICENSE`.
 
 ```
 backend/            Django project (config/ = settings+api+middleware)
-  accounts/         custom User, JWT issuance, cookie helpers, blacklist
+  accounts/         custom User, JWT issuance, cookie helpers, blacklist, admin hardening
   monitors/         Monitor/Check models, CRUD + public API, check engine,
-                    management/commands/run_checks.py (+ self-monitor seed)
+                    management/commands/ (run_checks, run_scheduler, check_ssl,
+                    check_domains, crawl_links)
   billing/          Polar checkout/portal/webhook, plan limits
 frontend/           Vue 3 + Vite SPA
   src/api/          fetch client (silent refresh, CSRF header)
   src/composables/  useTheme (system/light/dark, persisted, no-FLASH boot)
   src/assets/css/   main.css (tokens+reset) · utilities.css (atomic) · components.css · landing.css
   scripts/          gen-api.mjs · mobile-audit.mjs (CDP overflow + tap-target check)
+  vercel.json       SPA fallback + /api proxy to Render
+Dockerfile          API + in-container scheduler image (Render)
+render.yaml         Render blueprint (Docker, free plan, health check, env)
 scripts/            Windows Task Scheduler registration + Linux crontab example
 ```
 
@@ -150,17 +156,21 @@ monitor limit and minimum check interval update immediately.
   manager at `/status-pages`, public page at `/p/<slug>`, public data at
   `/api/public/statuspages/<slug>`.
 - **Account moderation** — `POST /api/auth/moderation/users/<id>/disable` and
-  `/enable` (staff JWT only) plus bulk actions in the Django admin. Disabling
-  pauses the owner's active monitors and remembers their IDs, so re-enabling
-  resumes exactly those and leaves monitors the user paused themselves alone.
+  `/enable` (staff JWT only) plus routine `manage.py moderate …` commands
+  (`disable_user`, `enable_user`, `block_ip`, `unblock_ip`, `list_recent`).
+  The Django admin is opt-in (`ADMIN_ENABLED`) and superuser + TOTP only.
+  Disabling pauses the owner's active monitors and remembers their IDs, so
+  re-enabling resumes exactly those and leaves monitors the user paused
+  themselves alone.
 - **Policies** — `GET /api/policies/<slug>` returns the current versioned text.
   Edit `Policy` rows in the admin (or add a new version) and bump
   `TOS_VERSION` so new signups stamp the version they accepted.
 - **Cron over HTTP** — `GET /api/admin/run` lists the jobs and
   `POST /api/admin/run/{run-checks|deliver-notifications|check-ssl|check-domains|crawl-links}`
-  runs the matching management command. Staff JWT only, throttled at 2/min per
-  user, so an external scheduler can drive the minute jobs on a host without
-  a cron add-on (`.github/workflows/cron.yml` is the ready-made template).
+  runs the matching management command (superuser JWT). For machine callers use
+  `POST /api/admin/scheduler/{job}` with the `X-Scheduler-Token` header
+  (`SCHEDULER_TOKEN` env); the production container calls the commands directly
+  and doesn't need either endpoint.
 - **Account self-service** — change password (invalidates every other session),
   change email (confirmed by a link sent to the *new* address), sign out all
   other sessions, and delete your own account (PII anonymised, monitors paused).
@@ -181,6 +191,7 @@ cd backend
                                         # notification channels UI, maintenance windows,
                                         # incident history, moderation disable/enable,
                                         # honeypot + IP blocking, cron-over-HTTP triggers,
+                                        # scheduler token + admin login lockout,
                                         # CSRF, refresh rotation, SSRF, plan limits,
                                         # Polar webhook signature/idempotency, check engine,
                                         # TLS state, multi-region, status pages
@@ -203,11 +214,13 @@ cd backend
   Everything using the cache (throttling) keeps working — no code changes.
 - `GET /api/health` is an unauthenticated liveness probe (DB + cache) for
   load balancers / k8s — 200 with a JSON body when healthy, 503 otherwise.
-- Polar webhooks are idempotent (see the `WebhookEvent` ledger in the
-  Django admin). Downtime alerts flow through an outbox: schedule
-  `manage.py deliver_notifications` every minute next to `run_checks`, and
-  manage channels via the admin. Security/billing actions land in the
-  read-only `AuditLogEntry` admin view.
+  It also keeps the free Render instance (and the scheduler inside it) awake.
+- Polar webhooks are idempotent (see the `WebhookEvent` ledger in the Django
+  admin, when enabled). Downtime alerts flow through an outbox:
+  `manage.py run_scheduler` calls `deliver_notifications` every minute next to
+  `run_checks` (or schedule both with cron), and channels are managed in the
+  SPA. Security/billing actions land in the read-only `AuditLogEntry` admin
+  view.
 - Check intervals are minute-granular by design (cron). Sub-minute checks
   would need a persistent worker (Celery/Django-Q2) — the check logic in
   `monitors/services.run_check` is already worker-ready.
@@ -223,37 +236,14 @@ cd backend
   admin) — choose title, slug, theme color, visibility, and the monitors to
   publish. They render publicly at `/p/<slug>`.
 
-## Shipping it (no domain required)
+## Deployment
 
-Free-tier path that stays at **$0/month** until you have paying users:
+Free-tier topology: **Vercel** (SPA) + **Render** (Docker API + in-container scheduler) + **Supabase** (Postgres pooler), with Polar sandbox billing and UptimeRobot pings.
 
-| Layer | Service | Notes |
-|---|---|---|
-| SPA | **Vercel** (`*.vercel.app`) | free HTTPS + auto-deploy on `git push` |
-| API + cron | **Render** Web Service | free tier sleeps after ~15 min idle |
-| Postgres | **Neon** free tier | set `DATABASE_URL=postgres://…?sslmode=require` |
+- Full runbook: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
+- Environment template: [`render.env.example`](render.env.example) (placeholders only; real values live in Render)
+- Architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) - Security: [`docs/SECURITY.md`](docs/SECURITY.md) - Runbook: [`docs/RUNBOOK.md`](docs/RUNBOOK.md)
 
-- No custom domain is needed to launch — `https://<project>.vercel.app` is a real
-  public hostname with a valid certificate; add a domain later in Vercel.
-- Free tiers sleep when idle. Point a free pinger (e.g. UptimeRobot, 5-minute
-  interval) at `/api/health` so the first dashboard request after a quiet spell
-  is warm; `/api/health` is also the correct probe for load balancers.
-- **`SELF_MONITOR_URL` points at your own front door**, never at a third-party
-  uptime service: if it watched UptimeRobot, the self-monitor would stay green
-  while your app was down — exactly the outage you care about.
-- Prefer one origin: let Vercel rewrite `/api/*` to the API host. If you split
-  origins instead, set `CORS_ALLOWED_ORIGINS=https://<project>.vercel.app`
-  (DEBUG automatically adds the Vite dev origins) and `COOKIE_SECURE=True`.
-- **Cron on a host without a cron add-on** (Render free): enable
-  `.github/workflows/cron.yml` and set the `API_BASE_URL` + `CRON_JWT`
-  repository secrets. It calls the staff-only `/api/admin/run/*` endpoints every
-  minute (`run_checks`, `deliver_notifications`) and daily (`check_ssl`,
-  `check_domains`, `crawl_links`).
-  On a box with cron/Task Scheduler, use `scripts/crontab.example` or
-  `scripts/run_checks_scheduled.ps1` instead — same five commands.
-- Abuse controls are on by default: 256 KB body cap, registration honeypot
-  (`company` field), and automatic 24-hour IP blocks after 50 auth failures in
-  an hour. Review and lift blocks in the Django admin (*Blocked IPs*), and watch
-  *Abuse events* to spot attack patterns.
-- Before opening signups: replace the `statusmonitor.example` contact addresses
-  in the seeded policies, then set `TOS_VERSION` to the version you published.
+Keep `ADMIN_ENABLED=False` in production; use `manage.py moderate ...` for routine work and enable the admin only for break-glass sessions.
+
+`GET /api/health` is the Render health check and the UptimeRobot wake ping. Free Render instances sleep after ~15 min idle, which also pauses the scheduler - upgrade when you depend on minute-level checks.

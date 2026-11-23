@@ -1,5 +1,4 @@
-"""Staff-only HTTP triggers for the periodic management commands."""
-
+"""Superuser-only HTTP triggers for the periodic management commands."""
 
 from django.test import TestCase
 
@@ -11,7 +10,13 @@ from monitors.models import Monitor
 
 class AdminRunTests(TestCase):
     def setUp(self):
-        self.staff = User.objects.create_user("ops", "ops@example.com", "Str0ng-Pass!", is_staff=True)
+        self.staff = User.objects.create_user(
+            "ops",
+            "ops@example.com",
+            "Str0ng-Pass!",
+            is_staff=True,
+            is_superuser=True,
+        )
         self.user = User.objects.create_user("plain", "plain@example.com", "Str0ng-Pass!")
         self.staff_token = create_access_token(self.staff)
         self.user_token = create_access_token(self.user)

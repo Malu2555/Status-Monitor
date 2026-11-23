@@ -5,10 +5,12 @@ a JSON body when everything is fine or 503 naming the failing component.
 Auth and throttling are bypassed so load balancers and k8s probes can hit it
 freely — this is intentionally separate from the public status feed.
 """
+
 import json
 import logging
 from datetime import UTC, datetime
 
+from django.conf import settings
 from django.core.cache import caches
 from django.db import connection
 from django.http import HttpResponse
@@ -57,10 +59,12 @@ def health(request):
         "ts": datetime.now(UTC).isoformat(),
     }
     if not healthy:
-        body["details"] = {
-            "db": "ok" if db_ok else db_detail,
-            "cache": "ok" if cache_ok else cache_detail,
-        }
+        # Never leak driver/host details to anonymous callers; logs keep them.
+        if settings.HEALTH_VERBOSE:
+            body["details"] = {
+                "db": "ok" if db_ok else db_detail,
+                "cache": "ok" if cache_ok else cache_detail,
+            }
         logger.error(
             "health probe degraded: db=%s cache=%s db-detail=%s cache-detail=%s",
             db_ok,

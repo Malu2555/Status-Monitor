@@ -1,0 +1,11 @@
+# Default owners for everything in this repository.
+# Replace @your-github-handle with the maintainer account before relying on it.
+*       @your-github-handle
+
+# Security-sensitive areas — require a security-aware review.
+/backend/accounts/            @your-github-handle
+/backend/config/              @your-github-handle
+/backend/core/                @your-github-handle
+/.github/workflows/           @your-github-handle
+/docs/SECURITY.md             @your-github-handle
+/SECURITY.md                  @your-github-handle

@@ -1,9 +1,12 @@
+import json
 from unittest import mock
 
 from django.core import mail
 from django.test import TestCase
 
 from accounts.models import User
+from accounts.services import create_access_token
+from core.net import safe_post
 from monitors.models import Monitor
 from notifications.models import MonitorNotificationChannel, NotificationDelivery
 from notifications.services import deliver_pending, enqueue_state_transition
@@ -76,10 +79,43 @@ class NotificationTests(TestCase):
         self.assertIn("RuntimeError", row.last_error)
 
     def test_webhook_delivery_success(self):
-        self._channel(kind="webhook", address="https://hooks.example.com/x")
+        self._channel(kind="webhook", address="https://example.com/x")
         enqueue_state_transition(self.monitor, Monitor.Status.UP, Monitor.Status.DOWN, {})
-        with mock.patch("notifications.channels.httpx.Client"):
+        with mock.patch("notifications.channels.safe_post") as post:
             sent, failed, dead = deliver_pending()
         self.assertEqual((sent, failed, dead), (1, 0, 0))
+        post.assert_called_once()
         row = NotificationDelivery.objects.get()
         self.assertEqual(row.status, NotificationDelivery.Status.SENT)
+
+
+class ChannelValidationTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user("chanuser", "chan@example.com", "password123")
+        self.monitor = Monitor.objects.create(owner=self.user, name="Site", url="https://example.com")
+        self.token = create_access_token(self.user)
+
+    def _post(self, kind: str, address: str):
+        return self.client.post(
+            "/api/notifications/channels",
+            json.dumps({"monitor_id": self.monitor.pk, "kind": kind, "address": address, "enabled": True}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.token}",
+        )
+
+    def test_email_channel_is_restricted_to_the_account_address(self):
+        response = self._post("email", "someone-else@example.com")
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("account email", response.json()["detail"])
+
+    def test_private_webhook_is_rejected(self):
+        response = self._post("webhook", "http://127.0.0.1:8000/internal")
+        self.assertEqual(response.status_code, 422)
+
+    def test_public_webhook_is_accepted(self):
+        response = self._post("webhook", "https://example.com/hook")
+        self.assertEqual(response.status_code, 201)
+
+    def test_dispatch_guard_rejects_private_addresses(self):
+        with self.assertRaises(ValueError):
+            safe_post("http://10.0.0.5/hook")

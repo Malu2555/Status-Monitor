@@ -1,4 +1,5 @@
 """Audit helpers: append rows from any request/actor context, never raise."""
+
 import logging
 
 from .models import AuditLogEntry
@@ -7,13 +8,12 @@ logger = logging.getLogger("audit")
 
 
 def client_ip(request) -> str:
-    """Best-effort client IP (X-Forwarded-For aware)."""
+    """Best-effort client IP (trusted-proxy aware, consistent with rate limits)."""
     if request is None:
         return ""
-    forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR", "")
+    from accounts.abuse import client_ip as abuse_client_ip
+
+    return abuse_client_ip(request)
 
 
 def audit_log(request, kind: str, user=None, **payload):

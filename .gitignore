@@ -12,7 +12,12 @@ media/
 
 # Environment
 .env
+*.env
 *.env.local
+render.env
+# ...but keep the committed templates
+!.env.example
+!*.env.example
 
 # Node
 node_modules/
