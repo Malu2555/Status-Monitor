@@ -14,6 +14,8 @@ from pathlib import Path
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
+from config.env_checks import DEV_SECRET_KEY, validate_secret_key
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
@@ -29,8 +31,9 @@ def env_bool(name: str, default: bool = False) -> bool:
 # --------------------------------------------------------------------------
 # Core
 # --------------------------------------------------------------------------
-SECRET_KEY = os.environ.get("SECRET_KEY", "dev-insecure-key")
+SECRET_KEY = os.environ.get("SECRET_KEY", DEV_SECRET_KEY)
 DEBUG = os.environ.get("DEBUG", "True").lower() in ("1", "true", "yes")
+validate_secret_key(SECRET_KEY, DEBUG)
 ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", "localhost,127.0.0.1")
 # Render injects RENDER_EXTERNAL_HOSTNAME; accept it automatically so a
 # forgotten ALLOWED_HOSTS value doesn't take the service down.
