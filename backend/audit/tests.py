@@ -23,7 +23,8 @@ class AuditServiceTests(TestCase):
             "audit.services.AuditLogEntry.objects.create",
             side_effect=RuntimeError("db down"),
         ):
-            row = audit_log(None, "auth.login", user=None)
+            with self.assertLogs("audit", level="ERROR"):
+                row = audit_log(None, "auth.login", user=None)
         self.assertIsNone(row)
 
 
@@ -43,9 +44,7 @@ class AuditHookTests(TestCase):
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 201)
-        self.assertTrue(
-            AuditLogEntry.objects.filter(kind="auth.register", payload__username="newuser").exists()
-        )
+        self.assertTrue(AuditLogEntry.objects.filter(kind="auth.register", payload__username="newuser").exists())
 
     def test_failed_login_writes_audit_row(self):
         User.objects.create_user("knownuser", "k@example.com", "Str0ng-Pass!")
@@ -78,6 +77,4 @@ class AuditHookTests(TestCase):
                 HTTP_AUTHORIZATION=f"Bearer {access}",
             )
         self.assertEqual(response.status_code, 201)
-        self.assertTrue(
-            AuditLogEntry.objects.filter(kind="monitor.create", payload__name="Site").exists()
-        )
+        self.assertTrue(AuditLogEntry.objects.filter(kind="monitor.create", payload__name="Site").exists())

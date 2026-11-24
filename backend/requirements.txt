@@ -7,7 +7,7 @@ python-dotenv>=1.0
 PyJWT==2.14.0             # JWT encode/decode (pinned: newer releases enforce key length)
 psycopg[binary]>=3.2     # PostgreSQL driver (used when DATABASE_URL is set)
 sentry-sdk[django]==2.69.2  # error reporting (active only when SENTRY_DSN is set; pinned for CI parity)
-django-otp>=1.5          # opt-in TOTP two-factor authentication
+django-otp==1.7.3         # opt-in TOTP two-factor authentication (pinned for CI parity)
 gunicorn>=23             # production WSGI server (Linux deployments)
 django-stubs==6.1.1  # dev: type info for Pylance/pyright (pinned for CI parity)
 

@@ -14,6 +14,10 @@ class LoginLockoutTests(TestCase):
         cache.clear()
         self.user = User.objects.create_user("alice", "alice@example.com", "Str0ng-Pass!")
 
+    def tearDown(self):
+        # The lockout counter lives in the shared cache, not the DB transaction.
+        cache.clear()
+
     def _login(self, password: str):
         return self.client.post(
             "/api/auth/login",

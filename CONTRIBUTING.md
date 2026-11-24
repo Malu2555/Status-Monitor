@@ -86,6 +86,9 @@ deploy time.
   colors), 44px touch targets, keyboard-accessible controls.
 - **Security:** never log tokens/passwords; treat notification addresses as
   secrets; add a regression test for every auth/abuse fix.
+- **Tests:** a test that intentionally fails auth must clear the cache in
+  `tearDown` (abuse counters and login locks live in the shared cache, which is
+  not rolled back with the database).
 - **Docs:** architecture decisions go in `docs/ADRs/`; runbook changes in
   `docs/RUNBOOK.md`; env changes in `docs/DEPLOYMENT.md` +
   `render.env.example`.

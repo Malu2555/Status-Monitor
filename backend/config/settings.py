@@ -234,6 +234,18 @@ SCHEDULER_TOKEN = os.environ.get("SCHEDULER_TOKEN", "").strip()
 # Throttling bucket checks are disabled while the test runner is active.
 DISABLE_THROTTLING = "test" in sys.argv
 
+# Abuse auto-block: N failures per IP inside the window -> temporary block.
+AUTO_BLOCK_THRESHOLD = int(os.environ.get("AUTO_BLOCK_THRESHOLD", "50"))
+AUTO_BLOCK_WINDOW_SECONDS = int(os.environ.get("AUTO_BLOCK_WINDOW_SECONDS", "3600"))
+AUTO_BLOCK_FOR_SECONDS = int(os.environ.get("AUTO_BLOCK_FOR_SECONDS", str(24 * 3600)))
+
+if DISABLE_THROTTLING:
+    # django-otp throttles repeated TOTP failures (1s, 2s, 4s ...). That is a
+    # wall-clock dependency, so disable it while testing.
+    OTP_TOTP_THROTTLE_FACTOR = 0
+    # A burst of failed logins in one test must never block the whole run.
+    AUTO_BLOCK_THRESHOLD = 10**6
+
 # --------------------------------------------------------------------------
 # Request size limits — application-level DoS guard (never accept giant bodies)
 # --------------------------------------------------------------------------
@@ -337,6 +349,15 @@ LOGGING = {
         "config": {"handlers": ["console"], "level": "INFO", "propagate": False},
     },
 }
+
+
+if DISABLE_THROTTLING:
+    # Negative-path tests intentionally trigger warnings/errors; they are
+    # captured with assertLogs, so keep the test output readable.
+    for _logger in LOGGING["loggers"].values():
+        _logger["level"] = "ERROR"
+    LOGGING["loggers"]["django"] = {"level": "ERROR"}
+    LOGGING["loggers"]["django.request"] = {"level": "CRITICAL"}
 
 
 def _configure_logging(logging_settings: dict) -> None:

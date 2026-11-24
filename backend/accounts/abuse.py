@@ -138,19 +138,23 @@ def note_failure(ip: str, kind: str) -> bool:
     if not ip:
         return False
 
+    window = int(getattr(settings, "AUTO_BLOCK_WINDOW_SECONDS", AUTO_BLOCK_WINDOW_SECONDS))
+    threshold = int(getattr(settings, "AUTO_BLOCK_THRESHOLD", AUTO_BLOCK_THRESHOLD))
+    block_for = int(getattr(settings, "AUTO_BLOCK_FOR_SECONDS", AUTO_BLOCK_FOR_SECONDS))
+
     key = f"abuse:fail:{ip}"
     try:
         count = cache.incr(key)
     except ValueError:
-        cache.set(key, 1, AUTO_BLOCK_WINDOW_SECONDS)
+        cache.set(key, 1, window)
         count = 1
 
-    if count >= AUTO_BLOCK_THRESHOLD:
+    if count >= threshold:
         block_ip(
             ip,
             reason=f"auto: {count} {kind} events in 1h",
             auto=True,
-            seconds=AUTO_BLOCK_FOR_SECONDS,
+            seconds=block_for,
         )
         cache.delete(key)
         return True

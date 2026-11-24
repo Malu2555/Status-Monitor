@@ -1,8 +1,8 @@
 """Opt-in TOTP two-factor flows: enroll → activate → login gate → disable."""
-import json
-import time
 
-from django.test import TestCase
+import json
+
+from django.test import TestCase, override_settings
 
 from accounts.models import User
 from accounts.services import create_access_token
@@ -23,6 +23,7 @@ def _totp_code(device) -> str:
     )
 
 
+@override_settings(OTP_TOTP_THROTTLE_FACTOR=0)
 class OtpTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user("carol", "c@example.com", "Str0ng-Pass!")
@@ -40,9 +41,7 @@ class OtpTests(TestCase):
         payload = {"username": "carol", "password": "Str0ng-Pass!"}
         if otp is not None:
             payload["otp"] = otp
-        return self.client.post(
-            "/api/auth/login", json.dumps(payload), content_type="application/json"
-        )
+        return self.client.post("/api/auth/login", json.dumps(payload), content_type="application/json")
 
     def test_enroll_then_activate_then_login_gate(self):
         from django_otp.plugins.otp_totp.models import TOTPDevice
@@ -54,10 +53,9 @@ class OtpTests(TestCase):
         self.assertFalse(device.confirmed)
 
         # Wrong code refused.
-        self.assertEqual(
-            self._authed_post("/api/auth/otp/activate", {"code": "000000"}).status_code, 400
-        )
-        time.sleep(2)  # let django-otp's post-failure throttle delay expire
+        self.assertEqual(self._authed_post("/api/auth/otp/activate", {"code": "000000"}).status_code, 400)
+        # django-otp's verification throttle is disabled in tests
+        # (settings.OTP_TOTP_THROTTLE_FACTOR = 0), so no sleep is needed.
 
         # Valid code activates the device.
         response = self._authed_post("/api/auth/otp/activate", {"code": _totp_code(device)})
@@ -76,9 +74,7 @@ class OtpTests(TestCase):
     def test_otp_status_and_disable_flow(self):
         from django_otp.plugins.otp_totp.models import TOTPDevice
 
-        response = self.client.get(
-            "/api/auth/otp/status", HTTP_AUTHORIZATION=f"Bearer {self.access}"
-        )
+        response = self.client.get("/api/auth/otp/status", HTTP_AUTHORIZATION=f"Bearer {self.access}")
         self.assertEqual(response.json()["enabled"], False)
 
         self._authed_post("/api/auth/otp/enroll")
@@ -86,9 +82,7 @@ class OtpTests(TestCase):
         self._authed_post("/api/auth/otp/activate", {"code": _totp_code(device)})
         TOTPDevice.objects.filter(pk=device.pk).update(last_t=1)
 
-        response = self.client.get(
-            "/api/auth/otp/status", HTTP_AUTHORIZATION=f"Bearer {self.access}"
-        )
+        response = self.client.get("/api/auth/otp/status", HTTP_AUTHORIZATION=f"Bearer {self.access}")
         self.assertEqual(response.json()["enabled"], True)
 
         response = self._authed_post("/api/auth/otp/disable", {"code": _totp_code(device)})

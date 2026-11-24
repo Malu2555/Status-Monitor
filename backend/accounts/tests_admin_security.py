@@ -33,6 +33,10 @@ class AdminLoginProtectionTests(TestCase):
     def setUp(self):
         cache.clear()
 
+    def tearDown(self):
+        # The admin failure counter lives in the shared cache.
+        cache.clear()
+
     def test_login_page_renders_the_otp_field(self):
         response = self.client.get("/admin/login/")
         self.assertEqual(response.status_code, 200)

@@ -18,7 +18,8 @@ class HealthEndpointTests(TestCase):
     @override_settings(HEALTH_VERBOSE=True)
     def test_health_db_down(self):
         with mock.patch("health.api._database_ok", return_value=(False, "RuntimeError: db down")):
-            response = self.get()
+            with self.assertLogs("health", level="ERROR"):
+                response = self.get()
         self.assertEqual(response.status_code, 503)
         body = response.json()
         self.assertEqual(body["status"], "degraded")
@@ -28,7 +29,8 @@ class HealthEndpointTests(TestCase):
     @override_settings(HEALTH_VERBOSE=True)
     def test_health_cache_down(self):
         with mock.patch("health.api._cache_ok", return_value=(False, "RuntimeError: cache down")):
-            response = self.get()
+            with self.assertLogs("health", level="ERROR"):
+                response = self.get()
         self.assertEqual(response.status_code, 503)
         body = response.json()
         self.assertEqual(body["cache"], "err")
@@ -37,7 +39,8 @@ class HealthEndpointTests(TestCase):
     @override_settings(HEALTH_VERBOSE=False)
     def test_failure_details_are_hidden_in_production(self):
         with mock.patch("health.api._database_ok", return_value=(False, "OperationalError: secret-host")):
-            response = self.get()
+            with self.assertLogs("health", level="ERROR"):
+                response = self.get()
         self.assertEqual(response.status_code, 503)
         body = response.json()
         self.assertEqual(body["db"], "err")

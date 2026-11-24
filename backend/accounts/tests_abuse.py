@@ -47,6 +47,9 @@ class BlockedIPTests(TestCase):
     def setUp(self):
         cache.clear()
 
+    def tearDown(self):
+        cache.clear()
+
     def test_blocked_ip_is_refused_before_routing(self):
         BlockedIP.objects.create(ip="127.0.0.1", reason="test")
         resp = self.client.get("/api/health")
@@ -63,10 +66,11 @@ class BlockedIPTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertFalse(BlockedIP.objects.filter(ip="127.0.0.1").exists())
 
+    @override_settings(AUTO_BLOCK_THRESHOLD=3)
     def test_auto_block_after_threshold(self):
         ip = "127.0.0.1"
-        for _ in range(abuse.AUTO_BLOCK_THRESHOLD - 1):
-            self.assertFalse(abuse.note_failure(ip, "login"))
+        self.assertFalse(abuse.note_failure(ip, "login"))
+        self.assertFalse(abuse.note_failure(ip, "login"))
         self.assertTrue(abuse.note_failure(ip, "login"))
 
         row = BlockedIP.objects.get(ip=ip)

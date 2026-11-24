@@ -31,6 +31,9 @@ versioning once tagged.
 - CI test failures caused by the short development `SECRET_KEY`: the fallback is
   now long enough for PyJWT (HS256) and Django, production refuses weak keys at
   boot, and PyJWT is pinned.
+- OTP tests no longer depend on django-otp's wall-clock verification throttle;
+  abuse/login counters are cleared between tests, and expected negative-path
+  logs are captured with `assertLogs` instead of flooding the CI output.
 - Notification webhook/Slack/Discord channels validate against SSRF at create
   and dispatch time.
 - Unbounded growth of check history, abuse events, audit rows and the outbox.
