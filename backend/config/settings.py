@@ -389,7 +389,8 @@ if os.environ.get("SENTRY_DSN"):
         integrations=[DjangoIntegration()],
         environment="dev" if DEBUG else "prod",
         traces_sample_rate=0.0,  # leave performance tracing off for now
-        send_default_pii=False,
+        # PII is disabled by default (send_default_pii=False); keeping it implicit
+        # avoids a signature drift between sentry-sdk releases.
     )
 
 # --------------------------------------------------------------------------
