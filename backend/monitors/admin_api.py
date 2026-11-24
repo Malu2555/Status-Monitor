@@ -16,6 +16,7 @@ from django.conf import settings
 from django.core.management import call_command
 from ninja import Router, Schema
 from ninja.errors import HttpError
+from ninja.throttling import BaseThrottle
 
 from accounts.auth import AuthBearer
 from audit.services import audit_log
@@ -24,7 +25,7 @@ from config.throttling import AdminJobThrottle, SchedulerThrottle, SessionAuthTh
 router = Router(auth=AuthBearer())
 scheduler_router = Router(auth=None)
 
-JOB_THROTTLE = [AdminJobThrottle("120/h")]
+JOB_THROTTLE: list[BaseThrottle] = [AdminJobThrottle("120/h")]
 
 JOB_COMMANDS = {
     "run-checks": "run_checks",

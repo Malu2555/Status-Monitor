@@ -8,7 +8,7 @@ window (SSL_CRITICAL_DAYS), so you aren't spammed every sweep.
 from django.conf import settings
 from django.core.management.base import BaseCommand
 
-from monitors.models import Monitor
+from monitors.models import Monitor, SslCertificate
 from monitors.services import check_ssl
 from notifications.services import enqueue_ssl_alert
 
@@ -48,7 +48,9 @@ class Command(BaseCommand):
                 continue
 
             checked += 1
-            record = monitor.ssl
+            record = SslCertificate.objects.filter(monitor=monitor).first()
+            if record is None:
+                continue
             new_level = _level_for(result["days_remaining"])
             previous = record.alert_level or ""
             changed = new_level != previous

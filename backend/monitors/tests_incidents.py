@@ -1,4 +1,5 @@
 """Incident history endpoint used by the dashboard timeline."""
+
 from datetime import timedelta
 
 from django.test import TestCase
@@ -12,11 +13,9 @@ from monitors.models import Incident, Monitor
 class IncidentHistoryTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user("hist", "hist@example.com", "Str0ng-Pass!")
-        self.monitor = Monitor.objects.create(
-            owner=self.user, name="Site", url="https://example.com"
-        )
+        self.monitor = Monitor.objects.create(owner=self.user, name="Site", url="https://example.com")
         self.access = create_access_token(self.user)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {self.access}"}
+        self.auth = {"Authorization": f"Bearer {self.access}"}
         now = timezone.now()
         for index in range(3):
             Incident.objects.create(
@@ -31,7 +30,7 @@ class IncidentHistoryTests(TestCase):
     def _get(self, **params):
         query = "&".join(f"{key}={value}" for key, value in params.items())
         url = f"/api/monitors/{self.monitor.pk}/incidents"
-        return self.client.get(f"{url}?{query}" if query else url, **self.auth)
+        return self.client.get(f"{url}?{query}" if query else url, headers=self.auth)
 
     def test_returns_newest_first(self):
         resp = self._get()

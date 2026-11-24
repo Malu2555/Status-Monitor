@@ -173,7 +173,7 @@ monitor limit and minimum check interval update immediately.
   and doesn't need either endpoint.
 - **Account self-service** — change password (invalidates every other session),
   change email (confirmed by a link sent to the *new* address), sign out all
-  other sessions, and delete your own account (PII anonymised, monitors paused).
+  other sessions, and delete your own account (PII anonymized, monitors paused).
 - **Notification channels UI** — users add/pause/delete their own email,
   webhook, Slack, Discord and Telegram channels at `/notifications`, with a
   **Test** button that dispatches a synthetic message.

@@ -1,4 +1,5 @@
 """Product-polish tests: incidents, maintenance windows, list pagination."""
+
 from datetime import timedelta
 from typing import Any
 from unittest.mock import patch
@@ -50,8 +51,9 @@ class IncidentTests(TestCase):
         )
 
     def _check(self, status_code):
-        with patch("monitors.services.httpx.Client", lambda **kw: FakeClient(status_code)), patch(
-            "monitors.services.validate_target_url", side_effect=lambda url: url
+        with (
+            patch("monitors.services.httpx.Client", lambda **kw: FakeClient(status_code)),
+            patch("monitors.services.validate_target_url", side_effect=lambda url: url),
         ):
             return self.run_check(self.monitor)
 
@@ -98,7 +100,7 @@ class ListPolishTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user("pager", "pg@example.com", "password123")
         self.access = create_access_token(self.user)
-        self.hdr: dict[str, Any] = {"HTTP_AUTHORIZATION": f"Bearer {self.access}"}
+        self.hdr: dict[str, Any] = {"Authorization": f"Bearer {self.access}"}
         for index in range(5):
             Monitor.objects.create(
                 owner=self.user,
@@ -108,17 +110,17 @@ class ListPolishTests(TestCase):
             )
 
     def test_limit_and_offset_and_backward_compat(self):
-        response = self.client.get("/api/monitors?limit=2", **self.hdr)
+        response = self.client.get("/api/monitors?limit=2", headers=self.hdr)
         self.assertEqual(len(response.json()), 2)
-        response = self.client.get("/api/monitors?limit=2&offset=2", **self.hdr)
+        response = self.client.get("/api/monitors?limit=2&offset=2", headers=self.hdr)
         self.assertEqual(len(response.json()), 2)
-        response = self.client.get("/api/monitors", **self.hdr)
+        response = self.client.get("/api/monitors", headers=self.hdr)
         self.assertEqual(len(response.json()), 5)
 
     def test_filter_and_sort(self):
-        response = self.client.get("/api/monitors?status=down", **self.hdr)
+        response = self.client.get("/api/monitors?status=down", headers=self.hdr)
         self.assertEqual(len(response.json()), 2)
-        response = self.client.get("/api/monitors?sort=name", **self.hdr)
+        response = self.client.get("/api/monitors?sort=name", headers=self.hdr)
         names = [monitor["name"] for monitor in response.json()]
         self.assertEqual(names, sorted(names))
 

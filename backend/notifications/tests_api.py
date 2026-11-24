@@ -1,4 +1,5 @@
 """Owner-scoped notification channel API (list/create/update/delete/test)."""
+
 import json
 from unittest import mock
 
@@ -15,11 +16,9 @@ class NotificationApiTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user("chan", "chan@example.com", "Str0ng-Pass!")
         self.other = User.objects.create_user("peer", "peer@example.com", "Str0ng-Pass!")
-        self.monitor = Monitor.objects.create(
-            owner=self.user, name="Site", url="https://example.com"
-        )
+        self.monitor = Monitor.objects.create(owner=self.user, name="Site", url="https://example.com")
         self.access = create_access_token(self.user)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {self.access}"}
+        self.auth = {"Authorization": f"Bearer {self.access}"}
 
     def _create(self, kind="email", address=None, monitor_id=None):
         return self.client.post(
@@ -32,7 +31,7 @@ class NotificationApiTests(TestCase):
                 }
             ),
             content_type="application/json",
-            **self.auth,
+            headers=self.auth,
         )
 
     def test_create_list_patch_delete(self):
@@ -41,21 +40,19 @@ class NotificationApiTests(TestCase):
         channel_id = created.json()["id"]
         self.assertEqual(created.json()["monitor_name"], "Site")
 
-        listed = self.client.get("/api/notifications/channels", **self.auth)
+        listed = self.client.get("/api/notifications/channels", headers=self.auth)
         self.assertEqual(len(listed.json()), 1)
 
         patched = self.client.patch(
             f"/api/notifications/channels/{channel_id}",
             data=json.dumps({"enabled": False}),
             content_type="application/json",
-            **self.auth,
+            headers=self.auth,
         )
         self.assertEqual(patched.status_code, 200)
         self.assertFalse(patched.json()["enabled"])
 
-        deleted = self.client.delete(
-            f"/api/notifications/channels/{channel_id}", **self.auth
-        )
+        deleted = self.client.delete(f"/api/notifications/channels/{channel_id}", headers=self.auth)
         self.assertEqual(deleted.status_code, 204)
         self.assertFalse(MonitorNotificationChannel.objects.exists())
 
@@ -69,27 +66,19 @@ class NotificationApiTests(TestCase):
 
     def test_telegram_address_shape_is_enforced(self):
         self.assertEqual(self._create(kind="telegram", address="1234").status_code, 422)
-        self.assertEqual(
-            self._create(kind="telegram", address="1234|5678").status_code, 201
-        )
+        self.assertEqual(self._create(kind="telegram", address="1234|5678").status_code, 201)
 
     def test_test_endpoint_sends_an_email(self):
         channel_id = self._create().json()["id"]
-        resp = self.client.post(
-            f"/api/notifications/channels/{channel_id}/test", **self.auth
-        )
+        resp = self.client.post(f"/api/notifications/channels/{channel_id}/test", headers=self.auth)
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["detail"], "Test message delivered.")
         self.assertEqual(len(mail.outbox), 1)
 
     def test_test_endpoint_reports_provider_errors(self):
         channel_id = self._create().json()["id"]
-        with mock.patch(
-            "notifications.channels.send_mail", side_effect=RuntimeError("smtp down")
-        ):
-            resp = self.client.post(
-                f"/api/notifications/channels/{channel_id}/test", **self.auth
-            )
+        with mock.patch("notifications.channels.send_mail", side_effect=RuntimeError("smtp down")):
+            resp = self.client.post(f"/api/notifications/channels/{channel_id}/test", headers=self.auth)
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["detail"], "Test message failed.")
         self.assertIn("RuntimeError", resp.json()["last_error"])
@@ -97,9 +86,7 @@ class NotificationApiTests(TestCase):
     def test_cannot_touch_another_users_channel(self):
         foreign = MonitorNotificationChannel.objects.create(
             user=self.other,
-            monitor=Monitor.objects.create(
-                owner=self.other, name="Theirs", url="https://example.org"
-            ),
+            monitor=Monitor.objects.create(owner=self.other, name="Theirs", url="https://example.org"),
             kind="email",
             address="theirs@example.com",
         )
@@ -107,13 +94,11 @@ class NotificationApiTests(TestCase):
             f"/api/notifications/channels/{foreign.pk}",
             data=json.dumps({"enabled": False}),
             content_type="application/json",
-            **self.auth,
+            headers=self.auth,
         )
         self.assertEqual(patched.status_code, 404)
         self.assertEqual(
-            self.client.delete(
-                f"/api/notifications/channels/{foreign.pk}", **self.auth
-            ).status_code,
+            self.client.delete(f"/api/notifications/channels/{foreign.pk}", headers=self.auth).status_code,
             404,
         )
         self.assertTrue(MonitorNotificationChannel.objects.filter(pk=foreign.pk).exists())

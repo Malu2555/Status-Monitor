@@ -16,8 +16,9 @@ versioning once tagged.
 - Moderation CLI (`manage.py moderate`) and `debug_proxy` diagnostics.
 - Render blueprint, Vercel proxy config, `.dockerignore`, SMTP settings,
   deployment/security/runbook docs and ADRs.
-- Pyright error-budget ratchet, frontend CI job and a Docker build + `/api/health`
-  smoke test in CI.
+- Pyright is now clean (0 errors) and blocking in CI; the toolchain is pinned
+  (`pyright`, `django-stubs`, `ruff`) and the temporary error-budget ratchet was
+  removed. A Docker build + `/api/health` smoke test runs in CI.
 
 ### Changed
 - Admin job triggers now require superuser; staff retains moderation API access.

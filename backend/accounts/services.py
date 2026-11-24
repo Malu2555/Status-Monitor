@@ -76,6 +76,8 @@ def user_from_payload(payload: dict):
         return None
     if user.tokens_invalid_before is not None:
         issued = payload.get("iat")
+        if issued is None:
+            return None
         try:
             issued_at = datetime.fromtimestamp(float(issued), tz=UTC)
         except (TypeError, ValueError, OSError, OverflowError):
@@ -272,9 +274,7 @@ def verify_otp_code(user, code: str) -> bool:
 def create_totp_device(user):
     from django_otp.plugins.otp_totp.models import TOTPDevice
 
-    device, _ = TOTPDevice.objects.get_or_create(
-        user=user, name="default", defaults={"confirmed": False}
-    )
+    device, _ = TOTPDevice.objects.get_or_create(user=user, name="default", defaults={"confirmed": False})
     return device
 
 
@@ -381,9 +381,7 @@ def api_token_record(raw: str):
     if not raw or not raw.startswith(API_TOKEN_PREFIX):
         return None
     try:
-        record = ApiToken.objects.select_related("user").get(
-            hashed_key=hash_api_token(raw), revoked_at__isnull=True
-        )
+        record = ApiToken.objects.select_related("user").get(hashed_key=hash_api_token(raw), revoked_at__isnull=True)
     except ApiToken.DoesNotExist:
         return None
     if not record.user.is_active:
@@ -424,9 +422,7 @@ def disable_user(user, reason: str = "manual") -> int:
     """Deactivate an account and pause its monitors. Returns how many were paused."""
     from monitors.models import Monitor
 
-    paused_ids = list(
-        Monitor.objects.filter(owner=user, is_active=True).values_list("id", flat=True)
-    )
+    paused_ids = list(Monitor.objects.filter(owner=user, is_active=True).values_list("id", flat=True))
     if paused_ids:
         Monitor.objects.filter(id__in=paused_ids).update(is_active=False)
     user.is_active = False
@@ -522,9 +518,7 @@ def soft_delete_account(user) -> int:
 
     from .models import ApiToken, RecoveryCode
 
-    paused_ids = list(
-        Monitor.objects.filter(owner=user, is_active=True).values_list("id", flat=True)
-    )
+    paused_ids = list(Monitor.objects.filter(owner=user, is_active=True).values_list("id", flat=True))
     if paused_ids:
         Monitor.objects.filter(id__in=paused_ids).update(is_active=False)
 

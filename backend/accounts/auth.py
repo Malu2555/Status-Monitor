@@ -27,6 +27,8 @@ class ApiKeyAuth(APIKeyHeader):
     param_name = "X-API-Key"
 
     def authenticate(self, request, key) -> "User | None":
+        if not key:
+            return None
         record = api_token_record(key)
         if record is None:
             return None

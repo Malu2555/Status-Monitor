@@ -56,8 +56,13 @@ class Command(BaseCommand):
                 "warn": 1,
                 "critical": 2,
             }[previous_level]
-            if new_level and (new_level != previous_level or escalated or options["force"]):
-                enqueue_domain_alert(monitor, result.get("days_remaining"), new_level)
+            days_remaining = result.get("days_remaining")
+            if (
+                new_level
+                and days_remaining is not None
+                and (new_level != previous_level or escalated or options["force"])
+            ):
+                enqueue_domain_alert(monitor, int(days_remaining), new_level)
                 alerted += 1
             if new_level != previous_level:
                 DomainRegistration.objects.filter(monitor=monitor).update(alert_level=new_level)

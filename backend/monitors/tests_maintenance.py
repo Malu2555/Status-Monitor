@@ -1,4 +1,5 @@
 """Maintenance window planning API."""
+
 import json
 from datetime import timedelta
 
@@ -14,11 +15,9 @@ class MaintenanceApiTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user("plan", "plan@example.com", "Str0ng-Pass!")
         self.other = User.objects.create_user("other", "other@example.com", "Str0ng-Pass!")
-        self.monitor = Monitor.objects.create(
-            owner=self.user, name="Site", url="https://example.com"
-        )
+        self.monitor = Monitor.objects.create(owner=self.user, name="Site", url="https://example.com")
         self.access = create_access_token(self.user)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {self.access}"}
+        self.auth = {"Authorization": f"Bearer {self.access}"}
 
     def _create(self, monitor_id=None, days_ahead=1, hours=1, note="deploy"):
         start = timezone.now() + timedelta(days=days_ahead)
@@ -32,7 +31,7 @@ class MaintenanceApiTests(TestCase):
                 }
             ),
             content_type="application/json",
-            **self.auth,
+            headers=self.auth,
         )
 
     def test_create_and_list_window(self):
@@ -42,9 +41,7 @@ class MaintenanceApiTests(TestCase):
         self.assertEqual(body["monitor_id"], self.monitor.pk)
         self.assertEqual(body["note"], "deploy")
 
-        listed = self.client.get(
-            f"/api/monitors/{self.monitor.pk}/maintenance", **self.auth
-        )
+        listed = self.client.get(f"/api/monitors/{self.monitor.pk}/maintenance", headers=self.auth)
         self.assertEqual(listed.status_code, 200)
         self.assertEqual(len(listed.json()), 1)
 
@@ -63,15 +60,13 @@ class MaintenanceApiTests(TestCase):
                 }
             ),
             content_type="application/json",
-            **self.auth,
+            headers=self.auth,
         )
         self.assertEqual(resp.status_code, 422)
 
     def test_future_window_can_be_deleted(self):
         window_id = self._create().json()["id"]
-        resp = self.client.delete(
-            f"/api/monitors/{self.monitor.pk}/maintenance/{window_id}", **self.auth
-        )
+        resp = self.client.delete(f"/api/monitors/{self.monitor.pk}/maintenance/{window_id}", headers=self.auth)
         self.assertEqual(resp.status_code, 204)
         self.assertFalse(MaintenanceWindow.objects.exists())
 
@@ -81,9 +76,7 @@ class MaintenanceApiTests(TestCase):
             starts_at=timezone.now() - timedelta(minutes=5),
             ends_at=timezone.now() + timedelta(hours=1),
         )
-        resp = self.client.delete(
-            f"/api/monitors/{self.monitor.pk}/maintenance/{window.pk}", **self.auth
-        )
+        resp = self.client.delete(f"/api/monitors/{self.monitor.pk}/maintenance/{window.pk}", headers=self.auth)
         self.assertEqual(resp.status_code, 400)
         self.assertTrue(MaintenanceWindow.objects.filter(pk=window.pk).exists())
 

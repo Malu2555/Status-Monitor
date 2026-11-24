@@ -1,4 +1,5 @@
 """Self-service account management: password, email, sessions, deletion."""
+
 import json
 
 from django.core import mail
@@ -13,12 +14,10 @@ class _Base(TestCase):
     def setUp(self):
         self.user = User.objects.create_user("self1", "self1@example.com", "Old-Passw0rd!")
         self.access = create_access_token(self.user)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {self.access}"}
+        self.auth = {"Authorization": f"Bearer {self.access}"}
 
     def _post(self, path, body=None):
-        return self.client.post(
-            path, data=json.dumps(body or {}), content_type="application/json", **self.auth
-        )
+        return self.client.post(path, data=json.dumps(body or {}), content_type="application/json", headers=self.auth)
 
 
 class PasswordChangeTests(_Base):
@@ -35,11 +34,9 @@ class PasswordChangeTests(_Base):
         self.assertIsNotNone(self.user.tokens_invalid_before)
 
         # The pre-change token is dead, the replacement works.
-        self.assertEqual(self.client.get("/api/auth/me", **self.auth).status_code, 401)
+        self.assertEqual(self.client.get("/api/auth/me", headers=self.auth).status_code, 401)
         self.assertEqual(
-            self.client.get(
-                "/api/auth/me", HTTP_AUTHORIZATION=f"Bearer {new_access}"
-            ).status_code,
+            self.client.get("/api/auth/me", HTTP_AUTHORIZATION=f"Bearer {new_access}").status_code,
             200,
         )
         login = self.client.post(
@@ -104,25 +101,21 @@ class SessionRevokeTests(_Base):
         self.assertEqual(resp.status_code, 200)
         new_access = resp.json()["access"]
 
-        self.assertEqual(self.client.get("/api/auth/me", **self.auth).status_code, 401)
+        self.assertEqual(self.client.get("/api/auth/me", headers=self.auth).status_code, 401)
         self.assertEqual(
-            self.client.get(
-                "/api/auth/me", HTTP_AUTHORIZATION=f"Bearer {new_access}"
-            ).status_code,
+            self.client.get("/api/auth/me", HTTP_AUTHORIZATION=f"Bearer {new_access}").status_code,
             200,
         )
 
 
 class DeleteAccountTests(_Base):
     def test_delete_anonymises_disables_and_pauses_monitors(self):
-        monitor = Monitor.objects.create(
-            owner=self.user, name="Mine", url="https://example.com"
-        )
+        monitor = Monitor.objects.create(owner=self.user, name="Mine", url="https://example.com")
         resp = self.client.delete(
             "/api/auth/me",
             data=json.dumps({"current_password": "Old-Passw0rd!"}),
             content_type="application/json",
-            **self.auth,
+            headers=self.auth,
         )
         self.assertEqual(resp.status_code, 204)
 
@@ -148,7 +141,7 @@ class DeleteAccountTests(_Base):
             "/api/auth/me",
             data=json.dumps({"current_password": "wrong"}),
             content_type="application/json",
-            **self.auth,
+            headers=self.auth,
         )
         self.assertEqual(resp.status_code, 400)
         self.user.refresh_from_db()

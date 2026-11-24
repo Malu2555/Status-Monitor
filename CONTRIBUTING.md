@@ -41,8 +41,7 @@ cd backend
 ruff check .
 python manage.py makemigrations --check --dry-run
 python manage.py test
-pyright                     # informational; CI enforces the error budget
-python scripts/check_pyright_budget.py <current.json> pyright-baseline.json
+pyright                     # must report zero errors (blocking in CI)
 
 cd ../frontend
 npm run lint
@@ -50,11 +49,12 @@ npm run build
 npm run audit:mobile        # optional: needs a local Chrome
 ```
 
-CI treats ruff, tests, migration drift, frontend lint/build and gitleaks as
-blocking. `pip-audit` is informational; pyright fails only if the error count
-rises above `backend/pyright-baseline.json` (update it deliberately, never to
-hide a regression you introduced). A separate CI job builds the Docker image
-and smoke-tests `GET /api/health`; Render builds the same image at deploy time.
+CI treats ruff, pyright, tests, migration drift, frontend lint/build and gitleaks
+as blocking. `pip-audit` is informational. `pyright` must report **zero**
+errors; the analysis toolchain (`pyright`, `django-stubs`, `ruff`) is pinned in
+`requirements*.txt` so CI matches a local run. A separate CI job builds the
+Docker image and smoke-tests `GET /api/health`; Render builds the same image at
+deploy time.
 
 ## Conventions
 
@@ -77,7 +77,7 @@ and smoke-tests `GET /api/health`; Render builds the same image at deploy time.
 
 - [ ] Tests cover the change (happy path + failure/abuse path)
 - [ ] `ruff`, migrations check, backend tests, frontend lint/build pass
-- [ ] No new pyright errors (or baseline updated intentionally)
+- [ ] `ruff` / `pyright` clean (zero errors), tests and frontend build pass
 - [ ] No secrets, `.env` files or generated artifacts committed
 - [ ] Docs/ADRs updated when behaviour or environment changes
 - [ ] Screenshots or a short clip for UI changes

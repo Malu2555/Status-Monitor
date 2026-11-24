@@ -117,7 +117,7 @@ Supabase (TLS, pooler), app ↔ Polar (HMAC), app ↔ notification providers
       restricted
 - [ ] `prune_history` running daily; `Check` growth watched
 - [ ] UptimeRobot monitors for API, SPA and public feed
-- [ ] gitleaks + pip-audit + pyright budget green in CI
+- [ ] gitleaks + pyright green in CI (pip-audit is informational)
 - [ ] Backups/PITR enabled and a restore has been rehearsed
 
 ## 6. Incident response (first 30 minutes)

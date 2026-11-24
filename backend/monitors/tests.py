@@ -48,21 +48,21 @@ class MonitorApiTests(TestCase):
         self.access = resp.json()["access"]
 
     def _auth(self) -> dict[str, Any]:
-        return {"HTTP_AUTHORIZATION": f"Bearer {self.access}"}
+        return {"Authorization": f"Bearer {self.access}"}
 
     def _create(self, payload):
         return self.client.post(
             "/api/monitors",
             data=json.dumps(payload),
             content_type="application/json",
-            **self._auth(),
+            headers=self._auth(),
         )
 
     def test_create_and_list(self):
         resp = self._create({"name": "My Site", "url": "https://example.com", "is_public": True})
         self.assertEqual(resp.status_code, 201)
         monitor_id = resp.json()["id"]
-        resp = self.client.get("/api/monitors", **self._auth())
+        resp = self.client.get("/api/monitors", headers=self._auth())
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
         self.assertEqual(len(body), 1)
@@ -92,7 +92,7 @@ class MonitorApiTests(TestCase):
             f"/api/monitors/{created['id']}",
             data=json.dumps({"is_public": False}),
             content_type="application/json",
-            **self._auth(),
+            headers=self._auth(),
         )
         resp = self.client.get("/api/public/monitors")
         self.assertNotIn(created["id"], [m["id"] for m in resp.json()])

@@ -14,6 +14,7 @@ from billing.services import (
     handle_webhook_event,
     monitors_limit,
 )
+from monitors.models import Monitor
 
 SECRET = "whsec_" + base64.b64encode(b"test-webhook-secret").decode()
 SECRET_KEY_BYTES = base64.b64decode(SECRET[6:])
@@ -67,7 +68,7 @@ class BillingLogicTests(TestCase):
     def test_plan_limit_enforcement(self):
         Subscription.objects.create(user=self.user, plan="pro", status="active")
         for index in range(10):
-            self.user.monitors.create(name=f"M{index}", url=f"https://example{index}.com")
+            Monitor.objects.create(owner=self.user, name=f"M{index}", url=f"https://example{index}.com")
         ok, reason = can_add_monitor(self.user)
         self.assertFalse(ok)
         self.assertIn("limit", reason.lower())
@@ -100,12 +101,8 @@ class WebhookIdempotencyTests(TestCase):
         self.assertTrue(Subscription.objects.filter(user=self.user).exists())
 
     def test_subscription_revoked_drops_to_free(self):
-        Subscription.objects.create(
-            user=self.user, plan="pro", status="active", polar_subscription_id="sub_99"
-        )
-        handle_webhook_event(
-            {"type": "subscription.revoked", "data": {"id": "sub_99"}}, "revoke-1"
-        )
+        Subscription.objects.create(user=self.user, plan="pro", status="active", polar_subscription_id="sub_99")
+        handle_webhook_event({"type": "subscription.revoked", "data": {"id": "sub_99"}}, "revoke-1")
         subscription = Subscription.objects.get(user=self.user)
         self.assertEqual(subscription.status, Subscription.Status.CANCELED)
         self.assertEqual(subscription.plan, "free")
@@ -132,9 +129,7 @@ class WebhookIdempotencyTests(TestCase):
         handle_webhook_event(self._event(), "delivery-audit")
         handle_webhook_event(self._event("business"), "delivery-audit")
         self.assertEqual(
-            AuditLogEntry.objects.filter(
-                kind="billing.webhook_processed", payload__event_id="delivery-audit"
-            ).count(),
+            AuditLogEntry.objects.filter(kind="billing.webhook_processed", payload__event_id="delivery-audit").count(),
             1,
         )
 
@@ -143,21 +138,17 @@ class WebhookIdempotencyTests(TestCase):
 class WebhookSignatureTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user("siguser", "sig@example.com", "password123")
-        self.body = json.dumps(
-            polar_event(metadata={"user_id": str(self.user.pk), "plan": "pro"})
-        ).encode()
+        self.body = json.dumps(polar_event(metadata={"user_id": str(self.user.pk), "plan": "pro"})).encode()
         self.timestamp = str(int(time.time()))
 
     def _headers(self, body, msg_id="msg-1", timestamp=None):
         ts = timestamp or self.timestamp
         signed = f"{msg_id}.{ts}.".encode() + body
-        signature = base64.b64encode(
-            hmac.new(SECRET_KEY_BYTES, signed, hashlib.sha256).digest()
-        ).decode()
+        signature = base64.b64encode(hmac.new(SECRET_KEY_BYTES, signed, hashlib.sha256).digest()).decode()
         return {
-            "HTTP_WEBHOOK_ID": msg_id,
-            "HTTP_WEBHOOK_TIMESTAMP": ts,
-            "HTTP_WEBHOOK_SIGNATURE": f"v1,{signature}",
+            "Webhook-Id": msg_id,
+            "Webhook-Timestamp": ts,
+            "Webhook-Signature": f"v1,{signature}",
         }
 
     def test_valid_signature_processes(self):
@@ -165,7 +156,7 @@ class WebhookSignatureTests(TestCase):
             "/api/billing/webhook",
             self.body,
             content_type="application/json",
-            **self._headers(self.body),
+            headers=self._headers(self.body),
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(Subscription.objects.get(user=self.user).plan, "pro")
@@ -175,7 +166,7 @@ class WebhookSignatureTests(TestCase):
             "/api/billing/webhook",
             self.body + b" ",
             content_type="application/json",
-            **self._headers(self.body),
+            headers=self._headers(self.body),
         )
         self.assertEqual(response.status_code, 400)
         self.assertFalse(Subscription.objects.filter(user=self.user).exists())
@@ -186,7 +177,6 @@ class WebhookSignatureTests(TestCase):
             "/api/billing/webhook",
             self.body,
             content_type="application/json",
-            **headers,
+            headers=headers,
         )
         self.assertEqual(response.status_code, 400)
-

@@ -24,10 +24,10 @@ class AdminRunTests(TestCase):
         Monitor.objects.update(is_active=False)
 
     def _auth(self, token):
-        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+        return {"Authorization": f"Bearer {token}"}
 
     def test_index_lists_the_periodic_jobs(self):
-        resp = self.client.get("/api/admin/run", **self._auth(self.staff_token))
+        resp = self.client.get("/api/admin/run", headers=self._auth(self.staff_token))
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(
             {job["name"] for job in resp.json()},
@@ -42,7 +42,7 @@ class AdminRunTests(TestCase):
 
     def test_index_requires_staff(self):
         self.assertEqual(self.client.get("/api/admin/run").status_code, 401)
-        resp = self.client.get("/api/admin/run", **self._auth(self.user_token))
+        resp = self.client.get("/api/admin/run", headers=self._auth(self.user_token))
         self.assertEqual(resp.status_code, 403)
 
     def test_non_staff_cannot_trigger_jobs(self):
@@ -53,11 +53,11 @@ class AdminRunTests(TestCase):
             "check-domains",
             "crawl-links",
         ):
-            resp = self.client.post(f"/api/admin/run/{path}", **self._auth(self.user_token))
+            resp = self.client.post(f"/api/admin/run/{path}", headers=self._auth(self.user_token))
             self.assertEqual(resp.status_code, 403, path)
 
     def test_run_checks_returns_output_and_audits(self):
-        resp = self.client.post("/api/admin/run/run-checks", **self._auth(self.staff_token))
+        resp = self.client.post("/api/admin/run/run-checks", headers=self._auth(self.staff_token))
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
         self.assertEqual(body["job"], "run-checks")
@@ -65,11 +65,11 @@ class AdminRunTests(TestCase):
         self.assertTrue(AuditLogEntry.objects.filter(kind="admin.run_job").exists())
 
     def test_deliver_notifications_reports_counts(self):
-        resp = self.client.post("/api/admin/run/deliver-notifications", **self._auth(self.staff_token))
+        resp = self.client.post("/api/admin/run/deliver-notifications", headers=self._auth(self.staff_token))
         self.assertEqual(resp.status_code, 200)
         self.assertIn("sent=0", resp.json()["output"])
 
     def test_check_ssl_runs(self):
-        resp = self.client.post("/api/admin/run/check-ssl", **self._auth(self.staff_token))
+        resp = self.client.post("/api/admin/run/check-ssl", headers=self._auth(self.staff_token))
         self.assertEqual(resp.status_code, 200)
         self.assertIn("certificate", resp.json()["output"])

@@ -197,7 +197,8 @@ def crawl_monitor(monitor: Monitor, max_seconds: int | None = None) -> dict:
         client.close()
 
     previous = {
-        (link.source_url, link.target_url): link for link in monitor.broken_links.filter(resolved_at__isnull=True)
+        (link.source_url, link.target_url): link
+        for link in BrokenLink.objects.filter(monitor=monitor, resolved_at__isnull=True)
     }
     new_links: list[dict] = []
     now = timezone.now()

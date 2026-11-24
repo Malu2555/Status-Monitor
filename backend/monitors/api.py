@@ -23,6 +23,8 @@ from audit.services import audit_log
 from config.throttling import MonitorAuthThrottle, PublicAnonThrottle
 
 from .models import (
+    BrokenLink,
+    CrawlRun,
     DomainRegistration,
     Incident,
     MaintenanceWindow,
@@ -368,7 +370,7 @@ def monitor_incidents(request, monitor_id: int, limit: int = 20, offset: int = 0
     monitor = _owned_or_404(request, monitor_id)
     limit = min(max(limit, 1), 100)
     offset = max(offset, 0)
-    incidents = monitor.incidents.all().order_by("-started_at")[offset : offset + limit]
+    incidents = Incident.objects.filter(monitor=monitor).order_by("-started_at")[offset : offset + limit]
     return [
         IncidentOut(
             id=incident.pk,
@@ -404,7 +406,10 @@ def _window_out(monitor, window) -> MaintenanceOut:
 )
 def monitor_maintenance_list(request, monitor_id: int):
     monitor = _owned_or_404(request, monitor_id)
-    return [_window_out(monitor, window) for window in monitor.maintenance_windows.order_by("starts_at")]
+    return [
+        _window_out(monitor, window)
+        for window in MaintenanceWindow.objects.filter(monitor=monitor).order_by("starts_at")
+    ]
 
 
 @router.post(
@@ -420,7 +425,11 @@ def monitor_maintenance_create(request, monitor_id: int, payload: MaintenanceIn)
         raise HttpError(422, "The window must end after it starts.")
     if (payload.ends_at - payload.starts_at).total_seconds() > 30 * 86400:
         raise HttpError(422, "Maintenance windows are limited to 30 days.")
-    conflict = monitor.maintenance_windows.filter(starts_at__lt=payload.ends_at, ends_at__gt=payload.starts_at).first()
+    conflict = (
+        MaintenanceWindow.objects.filter(monitor=monitor, starts_at__lt=payload.ends_at, ends_at__gt=payload.starts_at)
+        .order_by("starts_at")
+        .first()
+    )
     if conflict is not None:
         raise HttpError(422, f"That overlaps an existing window (id {conflict.pk}).")
     window = MaintenanceWindow.objects.create(
@@ -454,7 +463,7 @@ def monitor_maintenance_create(request, monitor_id: int, payload: MaintenanceIn)
 def monitor_maintenance_delete(request, monitor_id: int, window_id: int):
     monitor = _owned_or_404(request, monitor_id)
     _require_write(request)
-    window = monitor.maintenance_windows.filter(pk=window_id).first()
+    window = MaintenanceWindow.objects.filter(monitor=monitor, pk=window_id).first()
     if window is None:
         raise HttpError(404, "Maintenance window not found.")
     if window.starts_at <= timezone.now():
@@ -518,8 +527,8 @@ def monitor_ssl(request, monitor_id: int):
 
 
 def _crawl_report(monitor: Monitor) -> CrawlReportOut:
-    run = monitor.crawl_runs.first()
-    links = monitor.broken_links.filter(resolved_at__isnull=True)[:200]
+    run = CrawlRun.objects.filter(monitor=monitor).first()
+    links = BrokenLink.objects.filter(monitor=monitor, resolved_at__isnull=True)[:200]
     return CrawlReportOut(
         run=(
             CrawlRunOut(

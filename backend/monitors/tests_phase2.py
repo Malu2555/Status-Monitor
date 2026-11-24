@@ -28,19 +28,19 @@ class Phase2ApiTests(TestCase):
         self.monitor = Monitor.objects.create(name="Site", url="https://example.com", owner_id=self.user_id)
 
     def _auth(self) -> dict[str, Any]:
-        return {"HTTP_AUTHORIZATION": f"Bearer {self.access}"}
+        return {"Authorization": f"Bearer {self.access}"}
 
     def test_regions_endpoint_reports_per_region(self):
         Check.objects.create(monitor=self.monitor, is_up=True, status_code=200, response_ms=12, region="eu-west")
         Check.objects.create(monitor=self.monitor, is_up=False, status_code=503, response_ms=20, region="us-east")
-        resp = self.client.get(f"/api/monitors/{self.monitor.pk}/regions", **self._auth())
+        resp = self.client.get(f"/api/monitors/{self.monitor.pk}/regions", headers=self._auth())
         self.assertEqual(resp.status_code, 200)
         regions = {row["region"]: row for row in resp.json()}
         self.assertEqual(regions["eu-west"]["last_status"], "up")
         self.assertEqual(regions["us-east"]["last_status"], "down")
 
     def test_ssl_endpoint_before_first_check(self):
-        resp = self.client.get(f"/api/monitors/{self.monitor.pk}/ssl", **self._auth())
+        resp = self.client.get(f"/api/monitors/{self.monitor.pk}/ssl", headers=self._auth())
         self.assertEqual(resp.status_code, 200)
         self.assertIn("Not checked yet", resp.json()["error"])
 

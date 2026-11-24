@@ -15,6 +15,10 @@ concurrency:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    env:
+      # pyright is installed via pip; use the runner's Node instead of letting
+      # the wrapper download one at run time.
+      PYRIGHT_PYTHON_GLOBAL_NODE: "1"
     defaults:
       run:
         working-directory: backend
@@ -27,6 +31,10 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements*.txt
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -38,14 +46,10 @@ jobs:
       - name: Migrations are committed
         run: python manage.py makemigrations --check --dry-run
 
-      - name: Type-check (budget ratchet — fails only on NEW errors)
+      - name: Type-check (pyright, zero errors)
         run: |
-          pyright --outputjson > pyright-current.json || true
-          python scripts/check_pyright_budget.py pyright-current.json pyright-baseline.json
-
-      - name: Type-check (informational)
-        continue-on-error: true
-        run: pyright
+          pyright --version
+          pyright
 
       - name: Audit dependencies (informational)
         continue-on-error: true

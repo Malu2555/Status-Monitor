@@ -205,7 +205,7 @@ def update_channel(request, channel_id: int, payload: ChannelUpdateIn):
 )
 def delete_channel(request, channel_id: int):
     channel = _owned_channel(request, channel_id)
-    monitor_id = channel.monitor_id
+    monitor_id = channel.monitor.pk
     channel.delete()
     logger.info("notification channel deleted: id=%s user=%s", channel_id, request.auth.username)
     audit_log(

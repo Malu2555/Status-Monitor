@@ -80,7 +80,7 @@ class CoreFeatureTestBase(TestCase):
         cls.access = create_access_token(cls.user)
 
     def auth(self):
-        return {"HTTP_AUTHORIZATION": f"Bearer {self.access}"}
+        return {"Authorization": f"Bearer {self.access}"}
 
     def make_monitor(self, kind, *, config=None, url="https://example.com"):
         return Monitor.objects.create(
@@ -97,7 +97,7 @@ class CoreFeatureTestBase(TestCase):
             "/api/monitors",
             data=json.dumps(payload),
             content_type="application/json",
-            **self.auth(),
+            headers=self.auth(),
         )
 
 
@@ -189,7 +189,7 @@ class DomainMonitorTests(CoreFeatureTestBase):
         record = DomainRegistration.objects.get(monitor=monitor)
         self.assertEqual(record.status, "expiring")
 
-        response = self.client.get(f"/api/monitors/{monitor.pk}/domain", **self.auth())
+        response = self.client.get(f"/api/monitors/{monitor.pk}/domain", headers=self.auth())
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["domain"], "example.com")
@@ -267,7 +267,7 @@ class BrokenLinkCrawlTests(CoreFeatureTestBase):
         monitor.refresh_from_db()
         self.assertEqual(monitor.last_status, Monitor.Status.UP)
 
-        response = self.client.get(f"/api/monitors/{monitor.pk}/crawl", **self.auth())
+        response = self.client.get(f"/api/monitors/{monitor.pk}/crawl", headers=self.auth())
         self.assertEqual(response.status_code, 200)
         report = response.json()
         self.assertEqual(report["run"]["broken_count"], 1)

@@ -111,7 +111,7 @@ Database encryption/rotation is not implemented yet (see `SECURITY.md`).
 
 ## Deploy checklist
 
-- [ ] CI green (ruff, pyright budget, tests, frontend build, gitleaks)
+- [ ] CI green (ruff, pyright, tests, frontend build, gitleaks)
 - [ ] `makemigrations --check` clean
 - [ ] New env vars documented in `DEPLOYMENT.md` + `render.env.example`
 - [ ] Rollback image/commit noted

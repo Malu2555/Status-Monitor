@@ -1,4 +1,5 @@
 """Final-stage features: API tokens, badges, CSV export, heartbeats, status pages."""
+
 import json
 from datetime import timedelta
 from typing import Any
@@ -11,6 +12,8 @@ from monitors.services import evaluate_heartbeat
 
 
 class _AuthMixin:
+    client: Any
+
     def setUp(self):
         resp = self.client.post(
             "/api/auth/register",
@@ -30,7 +33,7 @@ class _AuthMixin:
         self.user_id = body["user"]["id"]
 
     def _auth(self) -> dict[str, Any]:
-        return {"HTTP_AUTHORIZATION": f"Bearer {self.access}"}
+        return {"Authorization": f"Bearer {self.access}"}
 
 
 class ApiTokenTests(_AuthMixin, TestCase):
@@ -39,7 +42,7 @@ class ApiTokenTests(_AuthMixin, TestCase):
             "/api/auth/tokens",
             data=json.dumps({"name": "ci", "scope": scope}),
             content_type="application/json",
-            **self._auth(),
+            headers=self._auth(),
         )
         self.assertEqual(resp.status_code, 200)
         return resp.json()
@@ -62,14 +65,14 @@ class ApiTokenTests(_AuthMixin, TestCase):
 
     def test_revoked_token_rejected(self):
         created = self._create_token("write")
-        revoke = self.client.delete(f"/api/auth/tokens/{created['id']}", **self._auth())
+        revoke = self.client.delete(f"/api/auth/tokens/{created['id']}", headers=self._auth())
         self.assertEqual(revoke.status_code, 200)
         resp = self.client.get("/api/monitors", HTTP_X_API_KEY=created["token"])
         self.assertEqual(resp.status_code, 401)
 
     def test_list_tokens(self):
         self._create_token("write")
-        resp = self.client.get("/api/auth/tokens", **self._auth())
+        resp = self.client.get("/api/auth/tokens", headers=self._auth())
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(len(resp.json()), 1)
         self.assertNotIn("token", resp.json()[0])
@@ -93,7 +96,7 @@ class BadgeAndExportTests(_AuthMixin, TestCase):
         self.assertIn("operational", resp.content.decode())
 
     def test_csv_export(self):
-        resp = self.client.get("/api/monitors/export.csv", **self._auth())
+        resp = self.client.get("/api/monitors/export.csv", headers=self._auth())
         self.assertEqual(resp.status_code, 200)
         self.assertIn("text/csv", resp["Content-Type"])
         text = resp.content.decode()
@@ -114,7 +117,7 @@ class HeartbeatTests(_AuthMixin, TestCase):
                 }
             ),
             content_type="application/json",
-            **self._auth(),
+            headers=self._auth(),
         )
         self.assertEqual(resp.status_code, 201)
         body = resp.json()
@@ -128,9 +131,7 @@ class HeartbeatTests(_AuthMixin, TestCase):
         self.assertEqual(monitor.last_status, Monitor.Status.UP)
 
         # Age the last ping beyond interval+grace, then evaluate -> down.
-        Monitor.objects.filter(pk=monitor.pk).update(
-            last_ping_at=timezone.now() - timedelta(seconds=400)
-        )
+        Monitor.objects.filter(pk=monitor.pk).update(last_ping_at=timezone.now() - timedelta(seconds=400))
         monitor.refresh_from_db()
         result = evaluate_heartbeat(monitor)
         self.assertFalse(result["is_up"])
@@ -141,9 +142,7 @@ class HeartbeatTests(_AuthMixin, TestCase):
 class StatusPageCrudTests(_AuthMixin, TestCase):
     def setUp(self):
         super().setUp()
-        self.monitor = Monitor.objects.create(
-            name="Site", url="https://example.com", owner_id=self.user_id
-        )
+        self.monitor = Monitor.objects.create(name="Site", url="https://example.com", owner_id=self.user_id)
 
     def test_crud(self):
         payload = {"slug": "acme", "title": "Acme", "monitor_ids": [self.monitor.pk]}
@@ -151,25 +150,22 @@ class StatusPageCrudTests(_AuthMixin, TestCase):
             "/api/statuspages",
             data=json.dumps(payload),
             content_type="application/json",
-            **self._auth(),
+            headers=self._auth(),
         )
         self.assertEqual(resp.status_code, 201)
         page_id = resp.json()["id"]
         self.assertEqual(resp.json()["monitor_ids"], [self.monitor.pk])
 
-        resp = self.client.get("/api/statuspages", **self._auth())
+        resp = self.client.get("/api/statuspages", headers=self._auth())
         self.assertEqual(resp.json()[0]["slug"], "acme")
 
         resp = self.client.patch(
             f"/api/statuspages/{page_id}",
             data=json.dumps({"title": "Acme Status"}),
             content_type="application/json",
-            **self._auth(),
+            headers=self._auth(),
         )
         self.assertEqual(resp.json()["title"], "Acme Status")
 
-        self.assertEqual(
-            self.client.delete(f"/api/statuspages/{page_id}", **self._auth()).status_code, 204
-        )
+        self.assertEqual(self.client.delete(f"/api/statuspages/{page_id}", headers=self._auth()).status_code, 204)
         self.assertFalse(StatusPage.objects.filter(pk=page_id).exists())
-
