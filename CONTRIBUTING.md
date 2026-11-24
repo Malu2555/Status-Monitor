@@ -11,12 +11,11 @@ scheduler.
 # from the repository root
 python -m venv .venv
 . .venv/Scripts/Activate.ps1        # Windows PowerShell
-pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+pip install -r backend/requirements.txt -r backend/requirements-dev.txt -c backend/constraints.txt
 
 cd backend
 python manage.py migrate
 python manage.py runserver          # http://127.0.0.1:8000
-
 cd ../frontend
 npm install
 npm run dev                         # http://localhost:5173 (proxies /api)
@@ -24,6 +23,24 @@ npm run dev                         # http://localhost:5173 (proxies /api)
 
 Copy `backend/.env.example` to `backend/.env` for local overrides. Never commit
 it; the repository ignores `*.env` and keeps only `*.env.example` templates.
+`DEBUG=False` requires a `SECRET_KEY` of at least 50 characters (the dev fallback
+is only used when `DEBUG=True`).
+
+## Dependency pinning
+
+`backend/constraints.txt` is a pinned snapshot of the dependency closure, used by
+CI and the Docker image (`pip install ... -c constraints.txt`) so all three
+environments install the same versions. Upgrade deliberately:
+
+```bash
+cd backend
+python -m pip install -U <package>
+python scripts/gen_constraints.py
+git diff constraints.txt      # review the change, then run the checks below
+```
+
+Never hand-edit `constraints.txt`; regenerate it. If a pin is wrong, fix the
+package version or the generator.
 
 Useful one-off commands:
 

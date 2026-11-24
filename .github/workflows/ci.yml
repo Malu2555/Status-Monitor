@@ -38,7 +38,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
+          pip install -r requirements.txt -r requirements-dev.txt -c constraints.txt
 
       - name: Lint (ruff)
         run: ruff check .
@@ -97,8 +97,8 @@ jobs:
           docker run --detach --name status-monitor-ci \
             --publish 8000:8000 \
             --env DEBUG=False \
-            --env SECRET_KEY=ci-only-secret \
-            --env JWT_SIGNING_KEY=ci-only-signing \
+            --env SECRET_KEY=ci-only-secret-0000000000000000000000000000000000000000 \
+            --env JWT_SIGNING_KEY=ci-only-signing-00000000000000000000000000000000000 \
             status-monitor:ci
           for attempt in $(seq 1 30); do
             if curl --fail --silent --show-error http://127.0.0.1:8000/api/health; then
