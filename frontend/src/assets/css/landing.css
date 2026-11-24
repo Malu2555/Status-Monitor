@@ -379,9 +379,14 @@
   position: absolute;
   top: -12px;
   left: 50%;
+  z-index: 1;
   transform: translateX(-50%);
   padding: 3px 10px;
-  background: var(--color-primary-soft);
+  /* The badge straddles the featured card's border. --color-primary-soft is
+     translucent in dark mode, so paint an opaque base first; otherwise the
+     card outline shows through the pill. */
+  background-color: var(--color-bg);
+  background-image: linear-gradient(var(--color-primary-soft), var(--color-primary-soft));
   border: 1px solid var(--color-primary-tint);
   border-radius: 9999px;
   color: var(--color-primary-deep);

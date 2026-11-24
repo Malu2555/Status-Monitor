@@ -28,6 +28,10 @@ versioning once tagged.
 - Health endpoint no longer exposes failure details in production.
 
 ### Fixed
+- The landing page's "Most Popular" badge is no longer cut by the featured
+  pricing card's outline in dark mode: the pill straddles the border, and the
+  translucent `--color-primary-soft` let the border show through it. The badge
+  now paints an opaque base first.
 - CI test failures caused by the short development `SECRET_KEY`: the fallback is
   now long enough for PyJWT (HS256) and Django, production refuses weak keys at
   boot, and PyJWT is pinned.
