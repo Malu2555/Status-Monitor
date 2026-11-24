@@ -3,6 +3,7 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import { COMING_SOON_LABEL, PLANS as plans } from '../utils/plans'
 import AppIcon from '../components/AppIcon.vue'
 import DashboardPreview from '../components/DashboardPreview.vue'
 
@@ -48,34 +49,6 @@ const features = [
     icon: 'bell',
     tone: 'orange',
     id: 'integrations',
-  },
-]
-
-const plans = [
-  {
-    name: 'Free',
-    price: '$0',
-    features: ['1 monitor', '5 min intervals', 'Public status page', 'Email alerts'],
-    cta: 'Create free account',
-    featured: false,
-    query: {},
-  },
-  {
-    name: 'Pro',
-    price: '$9',
-    features: ['10 monitors', '1 min intervals', 'Custom status pages', 'SSL & domain monitoring'],
-    cta: 'Start with Pro',
-    featured: true,
-    badge: 'Most Popular',
-    query: { plan: 'pro' },
-  },
-  {
-    name: 'Business',
-    price: '$29',
-    features: ['50 monitors', '1 min intervals', 'Multi-region checks', 'Webhook & chat alerts'],
-    cta: 'Start with Business',
-    featured: false,
-    query: { plan: 'business' },
   },
 ]
 
@@ -288,10 +261,21 @@ function serviceBars(count, softIndexes = []) {
             <p class="pricing-price">
               {{ plan.price }}<small>/mo</small>
             </p>
+            <p v-if="plan.comingSoon" class="pricing-soon">{{ COMING_SOON_LABEL }}</p>
             <ul class="pricing-list">
               <li v-for="line in plan.features" :key="line">{{ line }}</li>
             </ul>
+            <button
+              v-if="plan.comingSoon"
+              type="button"
+              class="btn pricing-cta"
+              :class="plan.featured ? 'btn-primary' : 'btn-ghost'"
+              disabled
+            >
+              {{ COMING_SOON_LABEL }}
+            </button>
             <router-link
+              v-else
               :to="{ name: auth.isAuthenticated ? 'dashboard' : 'register', query: plan.query }"
               class="btn pricing-cta"
               :class="plan.featured ? 'btn-primary' : 'btn-ghost'"

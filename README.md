@@ -20,8 +20,9 @@ Released under the **MIT licence** — see `LICENSE`.
   reuse detection (blacklist) and a CSRF double-submit check
 - **2FA:** opt-in TOTP with single-use recovery codes, managed at `/security`
 - **Billing:** Polar.sh subscriptions (merchant of record) — Free (1 monitor,
-  5-min checks), Pro ($9/mo, 10 monitors, 1-min), Business ($29/mo, 50
-  monitors, 1-min)
+  5-min checks), Pro (10 monitors, 1-min), Business (50 monitors, 1-min). Paid
+  plans are marked *coming soon* in the UI until the Polar products are approved;
+  prices live in `frontend/src/utils/plans.js` and Polar.
 - **Monitoring:** `manage.py run_scheduler` (container) or `manage.py run_checks`
   (cron/Task Scheduler). It checks every monitor whose interval has elapsed and
   evaluates heartbeat monitors against their last inbound ping. The container

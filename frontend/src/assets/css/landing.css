@@ -403,6 +403,21 @@
   letter-spacing: -0.04em;
 }
 .pricing-price small { font-size: 0.875rem; font-weight: 500; letter-spacing: 0; color: var(--color-muted); }
+/* Paid plans stay visible (price + features) but cannot be bought until Polar
+   approves the product — see `comingSoon` in src/utils/plans.js. */
+.pricing-soon {
+  align-self: center;
+  margin-top: 10px;
+  padding: 3px 10px;
+  background: var(--color-primary-soft);
+  border: 1px solid var(--color-primary-tint);
+  border-radius: 9999px;
+  color: var(--color-primary-deep);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
 .pricing-list {
   display: grid;
   flex: 1;

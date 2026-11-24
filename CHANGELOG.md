@@ -26,6 +26,11 @@ versioning once tagged.
 - Admin job triggers now require superuser; staff retains moderation API access.
 - Rate-limit identity uses trusted-proxy-aware client IP and hop count.
 - Health endpoint no longer exposes failure details in production.
+- Paid plan prices and labels come from one SPA catalogue
+  (`frontend/src/utils/plans.js`); the paid cards show their price with a
+  **Coming soon** chip and a disabled call to action until the Polar products
+  are approved, and are enabled per plan by flipping `comingSoon`. No price is
+  duplicated in the app, and the README no longer repeats prices.
 
 ### Fixed
 - The landing page's "Most Popular" badge is no longer cut by the featured

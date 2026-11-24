@@ -2,12 +2,30 @@
 // Plan usage bar + Polar checkout (upgrade) and portal (manage) buttons.
 import { computed, ref, watch } from 'vue'
 import * as billingApi from '../api/billing'
+import { COMING_SOON_LABEL, planById } from '../utils/plans'
 
 const props = defineProps({
   summary: { type: Object, required: true },
 })
 
 const busy = ref('')
+
+// Prices and availability come from the shared plan catalogue so the dashboard
+// buttons can never drift from the landing page (or from Polar's state).
+const proPlan = planById('pro')
+const businessPlan = planById('business')
+
+const proLabel = computed(() => {
+  if (proPlan.comingSoon) return `${proPlan.name} — ${COMING_SOON_LABEL.toLowerCase()}`
+  if (busy.value === 'pro') return 'Redirecting…'
+  return `Upgrade to ${proPlan.name} — ${proPlan.price}/mo`
+})
+
+const businessLabel = computed(() => {
+  if (businessPlan.comingSoon) return `${businessPlan.name} — ${COMING_SOON_LABEL.toLowerCase()}`
+  if (busy.value === 'business') return 'Redirecting…'
+  return `Upgrade to ${businessPlan.name} — ${businessPlan.price}/mo`
+})
 
 const usagePercent = computed(() => {
   const { monitors_used = 0, monitors_limit = 1 } = props.summary
@@ -55,11 +73,11 @@ async function manage() {
         </div>
       </div>
       <div class="flex gap-2 flex-wrap">
-        <button v-if="summary.plan !== 'pro' && summary.plan !== 'business'" class="btn btn-primary btn-sm" :disabled="busy === 'pro'" @click="upgrade('pro')">
-          {{ busy === 'pro' ? 'Redirecting…' : 'Upgrade to Pro — $9/mo' }}
+        <button v-if="summary.plan !== 'pro' && summary.plan !== 'business'" class="btn btn-primary btn-sm" :disabled="proPlan.comingSoon || busy === 'pro'" @click="upgrade('pro')">
+          {{ proLabel }}
         </button>
-        <button v-if="summary.plan !== 'pro' && summary.plan !== 'business'" class="btn btn-ghost btn-sm" :disabled="busy === 'business'" @click="upgrade('business')">
-          Business — $29/mo
+        <button v-if="summary.plan !== 'pro' && summary.plan !== 'business'" class="btn btn-ghost btn-sm" :disabled="businessPlan.comingSoon || busy === 'business'" @click="upgrade('business')">
+          {{ businessLabel }}
         </button>
         <button v-if="summary.plan !== 'free'" class="btn btn-ghost btn-sm" :disabled="busy === 'portal'" @click="manage">
           Manage subscription
