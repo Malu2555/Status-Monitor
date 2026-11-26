@@ -52,6 +52,45 @@ function refreshAccessToken() {
   return refreshPromise
 }
 
+// Turn any error body into readable text. Django Ninja returns a list of
+// { loc, msg, ... } validation errors for 422; other routes return a plain
+// `detail: "..."` string. Arrays/objects must be flattened here — passing them
+// straight into `new Error(...)` prints the useless "[object Object]".
+function describeErrorDetail(data, fallback) {
+  if (!data || typeof data !== 'object') return fallback
+  if (Array.isArray(data.detail)) {
+    const lines = data.detail.map((err) => {
+      const field = Array.isArray(err?.loc)
+        ? err.loc.filter((segment) => segment !== 'body').join('.')
+        : ''
+      let message = ''
+      if (err && typeof err.msg === 'string') {
+        message = err.msg
+      } else if (err != null) {
+        try {
+          message = JSON.stringify(err)
+        } catch {
+          message = String(err)
+        }
+      }
+      if (field && message) return `${field}: ${message}`
+      return message || field || 'Validation error'
+    })
+    const joined = lines.filter(Boolean).join('; ')
+    if (joined) return joined
+  }
+  if (typeof data.detail === 'string' && data.detail) return data.detail
+  if (data.detail) {
+    try {
+      return JSON.stringify(data.detail)
+    } catch {
+      /* fall through */
+    }
+  }
+  if (typeof data.message === 'string' && data.message) return data.message
+  return fallback
+}
+
 export async function apiFetch(path, { method = 'GET', body, auth = true } = {}) {
   const headers = { 'Content-Type': 'application/json' }
   if (accessToken && auth) headers.Authorization = `Bearer ${accessToken}`
@@ -85,7 +124,7 @@ export async function apiFetch(path, { method = 'GET', body, auth = true } = {})
     let detail = res.statusText
     try {
       const data = await res.json()
-      detail = data.detail ?? data.message ?? detail
+      detail = describeErrorDetail(data, detail)
     } catch {
       /* non-JSON body — keep statusText */
     }
@@ -94,7 +133,7 @@ export async function apiFetch(path, { method = 'GET', body, auth = true } = {})
       429: 'Too many requests — please wait a moment.',
       503: 'Service temporarily unavailable.',
     }[res.status]
-    throw new ApiError(res.status, friendly ?? detail)
+    throw new ApiError(res.status, friendly ?? (detail || `HTTP ${res.status}`))
   }
 
   if (res.status === 204) return null
