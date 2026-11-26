@@ -3,7 +3,7 @@
 # start command migrates + starts the scheduler + gunicorn (2 workers).
 services:
   - type: web
-    name: status-monitor-api
+    name: status-monitor-alpha-api
     runtime: docker
     plan: free
     region: frankfurt
@@ -40,7 +40,7 @@ services:
         value: "*"
       # 1 = Render only; set to 2 when the SPA proxies /api/* through Vercel.
       - key: PROXY_HOPS
-        value: "1"
+        value: "2"
       - key: REGION_NAME
         value: render
       # Django admin stays off until you deliberately enable it.
