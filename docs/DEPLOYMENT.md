@@ -94,15 +94,17 @@ python manage.py createcachetable
 ## 3. Frontend (Vercel)
 
 1. Import the repo and set **Root Directory = `frontend`**.
-2. Add environment variable `API_ORIGIN` = your Render host, **without scheme**
-   (e.g. `status-monitor-api.onrender.com`).
-3. `frontend/vercel.json` already provides:
-   - `/api/:path*` → `https://$API_ORIGIN/api/:path*` (keeps cookies same-origin)
+2. `frontend/vercel.json` rewrites `/api/:path*` to your API host **hardcoded**
+   in the `destination` (e.g. `https://status-monitor-alpha-api.onrender.com/api/:path*`),
+   keeping cookies same-origin. Edit that one string if your Render host differs.
+   Do **not** rely on an `API_ORIGIN` env var here: Vercel's `vercel.json`
+   rewrites do not interpolate environment variables in `destination` (only
+   `headers[].value` is expanded), so a `$API_ORIGIN` placeholder is treated as a
+   literal hostname and the proxy fails with `DNS_HOSTNAME_NOT_FOUND`.
+3. `frontend/vercel.json` also provides:
    - SPA fallback to `/index.html`
    - security headers (CSP, frame-deny, referrer, permissions policy, HSTS)
-4. If `$API_ORIGIN` interpolation is unavailable on your plan, replace it with
-   the literal host in `vercel.json`.
-5. Because the browser sees one origin, the `SameSite=Strict` refresh + CSRF
+4. Because the browser sees one origin, the `SameSite=Strict` refresh + CSRF
    cookies work unchanged. Only set `CORS_ALLOWED_ORIGINS` if you call Render
    directly instead of proxying (then cookies need `SameSite=None; Secure`).
 
