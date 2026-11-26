@@ -7,7 +7,10 @@ from pydantic import Field, field_validator
 
 
 class RegisterIn(Schema):
-    username: str = Field(min_length=3, max_length=30, pattern=r"^[\w.@+-]+$")
+    # Usernames are display names: allow spaces and (almost) any printable
+    # punctuation, enforcing only length. They are never used in URLs or tokens
+    # (JWT carries the user id), so the strict `[\w.@+-]` charset is unnecessary.
+    username: str = Field(min_length=3, max_length=30)
     email: str
     password: str = Field(min_length=8, max_length=128)
     # Explicit consent — both must be true or registration is refused (400).
@@ -15,6 +18,17 @@ class RegisterIn(Schema):
     accepted_age: bool = False
     # Honeypot: real users never see this field, so any value marks a bot.
     company: str = ""
+
+    @field_validator("username", mode="before")
+    @classmethod
+    def normalize_username(cls, value):
+        # Trim the ends and collapse runs of whitespace so "  John   Doe " is
+        # stored as "John Doe"; the 3-30 length is then counted on the result.
+        if isinstance(value, str):
+            value = " ".join(value.split())
+            if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+                raise ValueError("Username contains invalid characters.")
+        return value
 
     @field_validator("email")
     @classmethod
