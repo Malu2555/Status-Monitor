@@ -8,14 +8,14 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test:unit": "vitest",
     "lint": "run-s \"lint:*\"",
     "lint:oxlint": "oxlint . --fix",
     "lint:eslint": "eslint . --fix --cache",
     "api:gen": "node scripts/gen-api.mjs",
+    "seo:gen": "node scripts/gen-seo.mjs",
     "audit:mobile": "node scripts/mobile-audit.mjs",
     "postinstall": "npm run api:gen",
-    "prebuild": "npm run api:gen",
+    "prebuild": "npm run api:gen && npm run seo:gen",
     "format": "prettier --write --experimental-cli src/"
   },
   "dependencies": {

@@ -3,12 +3,15 @@ import hashlib
 import hmac
 import json
 import time
+from unittest.mock import patch
 
 from django.test import TestCase, override_settings
 
 from accounts.models import User
+from accounts.services import create_access_token
 from billing.models import Subscription, WebhookEvent
 from billing.services import (
+    PLANS,
     can_add_monitor,
     get_plan_summary,
     handle_webhook_event,
@@ -180,3 +183,46 @@ class WebhookSignatureTests(TestCase):
             headers=headers,
         )
         self.assertEqual(response.status_code, 400)
+
+
+class CheckoutGuardTests(TestCase):
+    """Checkout fails closed until Polar is configured for the plan.
+
+    `PLANS` snapshots `POLAR_PRODUCT_IDS` at import time, so the plan-level guard
+    is exercised by patching the table entry instead of `override_settings`.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            "buyer", "buyer@example.com", "password123", email_verified=True
+        )
+        self.access = create_access_token(self.user)
+
+    def _checkout(self, plan="pro"):
+        return self.client.post(
+            "/api/billing/checkout",
+            json.dumps({"plan": plan}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.access}",
+        )
+
+    def test_checkout_rejected_while_polar_product_is_unconfigured(self):
+        # This is the "Coming soon" contract: no product id -> no purchase.
+        with patch.dict(PLANS["pro"], {"product_id": ""}):
+            response = self._checkout("pro")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not configured", response.json()["detail"].lower())
+
+    def test_checkout_never_calls_polar_without_a_product_id(self):
+        with patch.dict(PLANS["business"], {"product_id": ""}):
+            with patch("billing.services.httpx.post") as post:
+                response = self._checkout("business")
+        self.assertEqual(response.status_code, 400)
+        post.assert_not_called()
+
+    @override_settings(POLAR_ACCESS_TOKEN="")
+    def test_checkout_reports_unconfigured_polar(self):
+        with patch.dict(PLANS["pro"], {"product_id": "prod_test"}):
+            response = self._checkout("pro")
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("not configured", response.json()["detail"].lower())

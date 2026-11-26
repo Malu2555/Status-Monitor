@@ -1,0 +1,15 @@
+# https://status-monitor-alpha.vercel.app
+User-agent: *
+Allow: /
+Disallow: /dashboard
+Disallow: /account
+Disallow: /security
+Disallow: /notifications
+Disallow: /status-pages
+Disallow: /maintenance
+Disallow: /login
+Disallow: /register
+Disallow: /verify-email
+Disallow: /reset-password
+
+Sitemap: https://status-monitor-alpha.vercel.app/sitemap.xml

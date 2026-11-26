@@ -26,12 +26,49 @@
       name="description"
       content="Monitor uptime, SSL certificates, broken links, and cron jobs from around the world. Get alerted in seconds."
     />
+    <!-- The shell carries the home page's tags; per-route title/description/
+         canonical are rewritten by the router (src/router/index.js) from
+         VITE_SITE_URL. Keep the literal URLs here in sync with that env var. -->
+    <link rel="canonical" href="https://status-monitor-alpha.vercel.app/" />
+    <meta property="og:site_name" content="Status Monitor" />
+    <meta property="og:url" content="https://status-monitor-alpha.vercel.app/" />
+    <meta property="og:image" content="https://status-monitor-alpha.vercel.app/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Status Monitor — uptime, SSL and status pages" />
     <meta property="og:title" content="Status Monitor — All-in-One Website & Uptime Monitoring" />
     <meta
       property="og:description"
       content="Uptime, SSL and domain expiry, broken links, cron jobs and status pages. Get alerted in seconds."
     />
     <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Status Monitor — All-in-One Website & Uptime Monitoring" />
+    <meta
+      name="twitter:description"
+      content="Uptime, SSL and domain expiry, broken links, cron jobs and status pages. Get alerted in seconds."
+    />
+    <meta name="twitter:image" content="https://status-monitor-alpha.vercel.app/og.png" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "Organization",
+            "name": "Status Monitor",
+            "url": "https://status-monitor-alpha.vercel.app/"
+          },
+          {
+            "@type": "SoftwareApplication",
+            "name": "Status Monitor",
+            "applicationCategory": "BusinessApplication",
+            "operatingSystem": "Web",
+            "url": "https://status-monitor-alpha.vercel.app/",
+            "description": "Uptime, SSL, domain expiry, broken-link and cron monitoring with public status pages and instant alerts."
+          }
+        ]
+      }
+    </script>
     <title>Status Monitor — Website & Uptime Monitoring</title>
   </head>
   <body>
