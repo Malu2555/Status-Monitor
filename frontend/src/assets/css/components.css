@@ -783,7 +783,7 @@ body:has(.mobile-cta) .site-footer {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  min-height: 42px;
+  min-height: 44px;
   padding: var(--space-2) var(--space-3);
   border: 0;
   border-radius: var(--radius);
@@ -864,4 +864,20 @@ body:has(.mobile-cta) .site-footer {
   }
   .monitor-nav-item { white-space: nowrap; }
   .monitor-cards { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ---------- narrow-screen hardening (≈390px) ---------- */
+.monitor-content { min-width: 0; }
+.monitor-card { min-width: 0; }
+.monitor-sidebar { -webkit-overflow-scrolling: touch; }
+@media (max-width: 520px) {
+  .stat-row { grid-template-columns: minmax(0, 1fr); }
+  .stat-cell {
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+  .stat-cell:last-child { border-bottom: 0; }
+  .monitors-search { flex-basis: 100%; max-width: none; }
+  .monitors-toolbar .btn { width: 100%; }
+  .monitor-header h1 { font-size: var(--text-xl); }
 }

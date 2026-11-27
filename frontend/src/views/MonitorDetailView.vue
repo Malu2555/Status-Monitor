@@ -10,7 +10,7 @@ import MonitorForm from '../components/MonitorForm.vue'
 import Sparkline from '../components/UptimeSparkline.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import UptimeBars from '../components/UptimeBars.vue'
-import { formatUptime, kindLabel, timeAgo } from '../utils/format'
+import { formatUptime, kindLabel, statusLabel, timeAgo } from '../utils/format'
 
 const route = useRoute()
 const router = useRouter()
@@ -217,7 +217,7 @@ watch(range, loadBuckets)
                 <span class="status-dot" :class="'dot-' + monitor.last_status"></span><h2>Uptime</h2>
               </header>
               <p class="text-sm text-muted">
-                {{ monitor.name }} is {{ monitor.last_status }}. Last checked
+                {{ monitor.name }} is {{ statusLabel(monitor.last_status) }}. Last checked
                 {{ timeAgo(monitor.last_checked_at) }}.
               </p>
               <div class="stat-row">

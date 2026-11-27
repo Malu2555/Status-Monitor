@@ -7,6 +7,7 @@ const emit = defineEmits(['save', 'cancel'])
 const props = defineProps({
   monitor: { type: Object, default: null },
   initialUrl: { type: String, default: '' },
+  busy: { type: Boolean, default: false },
 })
 
 const INTERVALS = [
@@ -274,7 +275,9 @@ function submit() {
     </div>
     <div class="flex justify-end gap-2 mt-4 form-actions">
       <button type="button" class="btn btn-ghost" @click="$emit('cancel')">Cancel</button>
-      <button type="submit" class="btn btn-primary">{{ monitor ? 'Save changes' : 'Add monitor' }}</button>
+      <button type="submit" class="btn btn-primary" :disabled="busy">
+        {{ busy ? 'Saving…' : monitor ? 'Save changes' : 'Add monitor' }}
+      </button>
     </div>
   </form>
 </template>
