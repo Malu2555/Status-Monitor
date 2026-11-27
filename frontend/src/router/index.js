@@ -163,11 +163,20 @@ router.afterEach((to) => {
   canonical.setAttribute('href', url)
 })
 
+// A readable cookie exists whenever a session may be present (it is set and
+// cleared alongside the httpOnly refresh cookie). Using its presence lets us
+// bootstrap on public routes only for returning users — so a logged-in user
+// opening /p/<slug> in a new window still restores the session (and shows the
+// app navbar), while anonymous visitors get no auth round-trip.
+function mayHaveSession() {
+  return /(?:^|;\s*)sm_csrf=/.test(document.cookie)
+}
+
 // Auth guard: bootstraps the session once (silent refresh via httpOnly cookie),
 // then enforces route access.
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
-  if (!auth.ready) await auth.bootstrap()
+  if (!auth.ready && (to.meta.requiresAuth || mayHaveSession())) await auth.bootstrap()
   if (to.meta.requiresAuth && !auth.isAuthenticated) return { name: 'login' }
   if ((to.name === 'login' || to.name === 'register') && auth.isAuthenticated) {
     return { name: 'dashboard' }

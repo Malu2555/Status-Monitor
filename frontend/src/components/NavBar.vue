@@ -16,7 +16,7 @@ const headerRef = ref(null)
 const toggleRef = ref(null)
 const menuRef = ref(null)
 
-const isAppMode = computed(() => Boolean(route.meta.requiresAuth))
+const isAppMode = computed(() => Boolean(route.meta.requiresAuth) || auth.isAuthenticated)
 const themeIcon = computed(() =>
   preference.value === 'system' ? 'monitor' : resolved.value === 'dark' ? 'moon' : 'sun',
 )
