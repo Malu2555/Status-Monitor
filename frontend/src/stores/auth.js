@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import * as authApi from '../api/auth'
 import * as billingApi from '../api/billing'
-import { setAccessToken, setOnUnauthorized } from '../api/client'
+import { getAccessToken, setAccessToken, setOnUnauthorized } from '../api/client'
 import { logger } from '../utils/logger'
 
 export const useAuthStore = defineStore('auth', {
@@ -36,6 +36,9 @@ export const useAuthStore = defineStore('auth', {
       try {
         const data = await authApi.me()
         this.user = data
+        // me() may have silently refreshed; adopt the in-memory token so
+        // `isAuthenticated` stays true after a hard reload.
+        this.accessToken = getAccessToken() || null
         logger.info('session restored for', data.username)
       } catch (error) {
         if (error.status !== 401) logger.warn('session bootstrap failed', error.message)

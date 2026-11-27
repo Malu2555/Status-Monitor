@@ -7,9 +7,9 @@ import * as monitorsApi from '../api/monitors'
 import AppIcon from '../components/AppIcon.vue'
 import IncidentTimeline from '../components/IncidentTimeline.vue'
 import MonitorForm from '../components/MonitorForm.vue'
-import Sparkline from '../components/UptimeSparkline.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import UptimeBars from '../components/UptimeBars.vue'
+import UptimeLatencyChart from '../components/UptimeLatencyChart.vue'
 import { formatUptime, kindLabel, statusLabel, timeAgo } from '../utils/format'
 
 const route = useRoute()
@@ -49,7 +49,6 @@ const sidebar = computed(() => {
   return items
 })
 
-const bucketValues = computed(() => buckets.value.map((b) => b.response_avg_ms))
 const bucketStats = computed(() => {
   const ms = buckets.value.map((b) => b.response_avg_ms).filter((v) => v != null)
   if (!ms.length) return null
@@ -171,7 +170,7 @@ watch(range, loadBuckets)
 
 <template>
   <div class="container">
-    <router-link :to="{ name: 'dashboard' }" class="text-sm text-muted">← Back to monitors</router-link>
+    <router-link :to="{ name: 'monitors' }" class="text-sm text-muted">← Back to monitors</router-link>
 
     <div v-if="loading" class="empty-state mt-6">Loading monitor…</div>
     <div v-else-if="error && !monitor" class="error-box mt-6">{{ error }}</div>
@@ -302,7 +301,7 @@ watch(range, loadBuckets)
             </div>
 
             <div class="mt-4">
-              <Sparkline :values="bucketValues" :height="140" />
+              <UptimeLatencyChart :buckets="buckets" :height="160" />
             </div>
             <div class="mt-3">
               <UptimeBars :buckets="buckets" />

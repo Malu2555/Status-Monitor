@@ -16,7 +16,15 @@ from django.utils import timezone
 
 from core.net import validate_target_url
 
-from .models import Check, DomainRegistration, Incident, MaintenanceWindow, Monitor, SslCertificate
+from .models import (
+    BrokenLink,
+    Check,
+    DomainRegistration,
+    Incident,
+    MaintenanceWindow,
+    Monitor,
+    SslCertificate,
+)
 
 logger = logging.getLogger("monitors")
 
@@ -625,3 +633,71 @@ def draft_postmortem(incident: Incident) -> str:
         "- Add a follow-up note here with the root cause and prevention.",
     ]
     return "\n".join(lines)
+
+
+def overview(user) -> dict:
+    """One-shot aggregate for the dashboard overview page.
+
+    Batches uptime (bulk), SSL expiry and open-broken-link counts so the page
+    is served in a single request (no per-monitor N+1).
+    """
+    monitors = list(Monitor.objects.filter(owner=user))
+    ids = [m.pk for m in monitors]
+    uptime_24 = bulk_uptime(ids, hours=24)
+    uptime_7 = bulk_uptime(ids, hours=168)
+
+    if ids:
+        cutoff = timezone.now() - timedelta(hours=24)
+        agg = Check.objects.filter(monitor_id__in=ids, checked_at__gte=cutoff).aggregate(
+            total=Count("id"), up=Count("id", filter=Q(is_up=True))
+        )
+    else:
+        agg = {"total": 0, "up": 0}
+    overall = round(agg["up"] / agg["total"] * 100, 2) if agg["total"] else None
+
+    ssl_map = {
+        row["monitor_id"]: row["days_remaining"]
+        for row in SslCertificate.objects.filter(monitor_id__in=ids).values(
+            "monitor_id", "days_remaining"
+        )
+    }
+    broken_map = {
+        row["monitor_id"]: row["count"]
+        for row in BrokenLink.objects.filter(monitor_id__in=ids, resolved_at__isnull=True)
+        .values("monitor_id")
+        .annotate(count=Count("id"))
+    }
+
+    now = timezone.now()
+    checks = []
+    for m in monitors:
+        cron_late = None
+        if m.kind == "heartbeat":
+            last = m.last_ping_at or m.created_at
+            deadline = last + timedelta(seconds=m.check_interval_seconds + m.heartbeat_grace_seconds)
+            cron_late = now > deadline
+        checks.append(
+            {
+                "id": m.pk,
+                "name": m.name,
+                "kind": m.kind,
+                "last_status": m.last_status,
+                "uptime_24h": uptime_24.get(m.pk),
+                "uptime_7d": uptime_7.get(m.pk),
+                "last_checked_at": m.last_checked_at,
+                "ssl_days_remaining": ssl_map.get(m.pk) if m.kind in ("http", "keyword") else None,
+                "broken_links": broken_map.get(m.pk, 0) if m.kind == "broken_links" else None,
+                "cron_late": cron_late,
+            }
+        )
+
+    up = sum(1 for m in monitors if m.last_status == Monitor.Status.UP)
+    down = sum(1 for m in monitors if m.last_status == Monitor.Status.DOWN)
+    return {
+        "monitors_total": len(monitors),
+        "monitors_up": up,
+        "monitors_down": down,
+        "monitors_unknown": len(monitors) - up - down,
+        "overall_uptime_24h": overall,
+        "checks": checks,
+    }

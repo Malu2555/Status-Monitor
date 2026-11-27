@@ -6,6 +6,8 @@ export const listMonitors = () => apiFetch('/monitors')
 
 export const getMonitor = (id) => apiFetch(`/monitors/${id}`)
 
+export const getOverview = () => apiFetch('/monitors/overview')
+
 export const createMonitor = (payload) => apiFetch('/monitors', { method: 'POST', body: payload })
 
 export const updateMonitor = (id, payload) => apiFetch(`/monitors/${id}`, { method: 'PATCH', body: payload })

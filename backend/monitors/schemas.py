@@ -108,6 +108,28 @@ class UptimeBucketOut(Schema):
     samples: int
 
 
+class OverviewCheckOut(Schema):
+    id: int
+    name: str
+    kind: str
+    last_status: str
+    uptime_24h: float | None = None
+    uptime_7d: float | None = None
+    last_checked_at: datetime | None = None
+    ssl_days_remaining: int | None = None
+    broken_links: int | None = None
+    cron_late: bool | None = None
+
+
+class OverviewOut(Schema):
+    monitors_total: int
+    monitors_up: int
+    monitors_down: int
+    monitors_unknown: int
+    overall_uptime_24h: float | None = None
+    checks: list[OverviewCheckOut] = []
+
+
 class StatsOut(Schema):
     uptime_percent: float | None
     total_checks: int

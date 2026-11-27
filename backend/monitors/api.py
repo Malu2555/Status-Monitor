@@ -44,6 +44,7 @@ from .schemas import (
     MonitorIn,
     MonitorOut,
     MonitorUpdateIn,
+    OverviewOut,
     PostmortemOut,
     PublicMonitorDetailOut,
     PublicMonitorOut,
@@ -57,6 +58,7 @@ from .services import (
     bulk_uptime,
     draft_postmortem,
     normalize_domain,
+    overview,
     record_heartbeat_ping,
     regional_statuses,
     uptime_buckets,
@@ -172,6 +174,12 @@ def list_monitors(
     if limit and limit > 0:
         return list(queryset[offset : offset + min(limit, 100)])
     return list(queryset)
+
+
+@router.get("/overview", response=OverviewOut, throttle=[MonitorAuthThrottle("120/h")], url_name="monitor_overview")
+def monitor_overview(request):
+    """One-shot aggregate for the dashboard overview page (no per-monitor N+1)."""
+    return overview(request.auth)
 
 
 @router.post(
