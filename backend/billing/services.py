@@ -37,7 +37,6 @@ PLANS = {
         "min_interval": 300,
         "status_pages": 1,
         "channels": 2,
-        "history_days": 30,
         "product_id": "",
     },
     "pro": {
@@ -46,7 +45,6 @@ PLANS = {
         "min_interval": 60,
         "status_pages": 3,
         "channels": 10,
-        "history_days": 90,
         "product_id": settings.POLAR_PRODUCT_IDS.get("pro", ""),
     },
     "business": {
@@ -55,7 +53,6 @@ PLANS = {
         "min_interval": 60,
         "status_pages": None,  # unlimited
         "channels": None,  # unlimited
-        "history_days": 365,
         "product_id": settings.POLAR_PRODUCT_IDS.get("business", ""),
     },
 }
@@ -124,10 +121,6 @@ def channels_limit(user) -> int | None:
     return PLANS[get_plan_name(user)]["channels"]
 
 
-def history_days(user) -> int:
-    return PLANS[get_plan_name(user)]["history_days"]
-
-
 def can_add_monitor(user) -> tuple[bool, str]:
     count = user.monitors.count()
     limit = monitors_limit(user)
@@ -166,7 +159,6 @@ def get_plan_summary(user) -> dict:
         "monitors_limit": monitors_limit(user),
         "status_pages_limit": status_pages_limit(user),
         "channels_limit": channels_limit(user),
-        "history_days": history_days(user),
         "subscription_status": subscription.status if subscription else "active",
         "current_period_end": (
             subscription.current_period_end.isoformat()

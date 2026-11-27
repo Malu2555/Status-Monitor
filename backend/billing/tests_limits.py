@@ -1,8 +1,8 @@
 """Capacity gates for the hosted tiers.
 
 Paid plans only raise *caps* (monitors, check frequency, status pages, alert
-channels, history window); they never unlock features. These tests pin the caps
-themselves and prove the create endpoints enforce them.
+channels); they never unlock features. These tests pin the caps themselves and
+prove the create endpoints enforce them.
 """
 import json
 
@@ -15,7 +15,6 @@ from billing.services import (
     can_add_channel,
     can_add_status_page,
     channels_limit,
-    history_days,
     status_pages_limit,
 )
 from monitors.models import Monitor, StatusPage
@@ -27,7 +26,6 @@ class PlanCapacityTests(TestCase):
         user = User.objects.create_user("freeuser", "free@example.com", "Str0ng-Pass!")
         self.assertEqual(status_pages_limit(user), 1)
         self.assertEqual(channels_limit(user), 2)
-        self.assertEqual(history_days(user), 30)
 
         self.assertTrue(can_add_status_page(user)[0])
         StatusPage.objects.create(owner=user, slug="free-page", title="Free")
@@ -49,7 +47,6 @@ class PlanCapacityTests(TestCase):
         Subscription.objects.create(user=user, plan="pro", status="active")
         self.assertEqual(status_pages_limit(user), 3)
         self.assertEqual(channels_limit(user), 10)
-        self.assertEqual(history_days(user), 90)
 
         for index in range(3):
             StatusPage.objects.create(owner=user, slug=f"pro-{index}", title=f"P{index}")
@@ -60,7 +57,6 @@ class PlanCapacityTests(TestCase):
         Subscription.objects.create(user=user, plan="business", status="active")
         self.assertIsNone(status_pages_limit(user))
         self.assertIsNone(channels_limit(user))
-        self.assertEqual(history_days(user), 365)
 
         for index in range(5):
             StatusPage.objects.create(owner=user, slug=f"biz-{index}", title=f"B{index}")

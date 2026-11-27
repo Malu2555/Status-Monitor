@@ -8,7 +8,8 @@
 // scanning, multi-region runners, webhook/chat alerts) works on Free and in the
 // open-source build. Keep the feature lists below limited to the caps actually
 // enforced in `backend/billing/services.py::PLANS` (monitors, min_interval,
-// status_pages, channels). `history_days` is shown for information.
+// status_pages, channels). Raw check history is a flat 30-day window
+// (`prune_history`) for every plan, so it is not advertised as a differentiator.
 
 export const COMING_SOON_LABEL = 'Coming soon'
 
@@ -17,7 +18,7 @@ export const PLANS = [
     id: 'free',
     name: 'Free',
     price: '$0',
-    features: ['1 monitor', '5-minute checks', '1 status page', '2 alert channels', '30-day history'],
+    features: ['1 monitor', '5-minute checks', '1 status page', '2 alert channels'],
     cta: 'Create free account',
     featured: false,
     badge: '',
@@ -28,7 +29,7 @@ export const PLANS = [
     id: 'pro',
     name: 'Pro',
     price: '$19',
-    features: ['10 monitors', '1-minute checks', '3 status pages', '10 alert channels', '90-day history'],
+    features: ['10 monitors', '1-minute checks', '3 status pages', '10 alert channels'],
     cta: 'Start with Pro',
     featured: true,
     badge: 'Most Popular',
@@ -39,7 +40,7 @@ export const PLANS = [
     id: 'business',
     name: 'Business',
     price: '$49',
-    features: ['50 monitors', '1-minute checks', 'Unlimited status pages', 'Unlimited alert channels', '365-day history'],
+    features: ['50 monitors', '1-minute checks', 'Unlimited status pages', 'Unlimited alert channels'],
     cta: 'Start with Business',
     featured: false,
     badge: '',
