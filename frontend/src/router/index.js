@@ -73,6 +73,12 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/monitors/:id/:tab?',
+    name: 'monitor',
+    component: () => import('../views/MonitorDetailView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/security',
     name: 'security',
     component: () => import('../views/SecurityView.vue'),

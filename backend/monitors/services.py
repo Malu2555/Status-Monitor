@@ -235,6 +235,57 @@ def bulk_uptime(monitor_ids: list[int], hours: int = 24) -> dict:
     return {row["monitor_id"]: (round(row["up"] / row["total"] * 100, 2) if row["total"] else None) for row in rows}
 
 
+def uptime_buckets(monitor: Monitor, hours: int = 24, bucket_hours: int = 1) -> list[dict]:
+    """Contiguous per-bucket uptime + latency series for the detail-page graph.
+
+    One entry per ``bucket_hours`` block across the whole ``hours`` window, so
+    the frontend can render a bar per bucket (green healthy / amber degraded /
+    red down / neutral when no checks ran). ``response_avg_ms`` is the mean
+    latency of up (and down) checks that reported a timing.
+    """
+    hours = max(1, min(hours, 720))
+    bucket_hours = max(1, min(bucket_hours, hours))
+    now = timezone.now().replace(minute=0, second=0, microsecond=0)
+    if bucket_hours > 1:
+        now = now.replace(hour=(now.hour // bucket_hours) * bucket_hours)
+    span = timedelta(hours=bucket_hours * max(1, hours // bucket_hours))
+    start = now - span
+
+    agg: dict = {}
+    checks = Check.objects.filter(monitor=monitor, checked_at__gte=start).only(
+        "checked_at", "is_up", "response_ms"
+    )
+    for check in checks:
+        bucket = check.checked_at.replace(minute=0, second=0, microsecond=0)
+        if bucket_hours > 1:
+            bucket = bucket.replace(hour=(bucket.hour // bucket_hours) * bucket_hours)
+        entry = agg.setdefault(bucket, {"up": 0, "samples": 0, "ms_sum": 0, "ms_n": 0})
+        entry["samples"] += 1
+        if check.is_up:
+            entry["up"] += 1
+        if check.response_ms is not None:
+            entry["ms_sum"] += check.response_ms
+            entry["ms_n"] += 1
+
+    series: list[dict] = []
+    cursor = start
+    while cursor <= now:
+        entry = agg.get(cursor)
+        samples = entry["samples"] if entry else 0
+        series.append(
+            {
+                "bucket": cursor.isoformat(),
+                "up_ratio": round(entry["up"] / samples, 3) if entry and samples else 0.0,
+                "response_avg_ms": (
+                    round(entry["ms_sum"] / entry["ms_n"]) if entry and entry["ms_n"] else None
+                ),
+                "samples": samples,
+            }
+        )
+        cursor += timedelta(hours=bucket_hours)
+    return series
+
+
 # --------------------------------------------------------------------------
 # Domain expiry monitoring (RDAP — no API key, no extra dependency)
 # --------------------------------------------------------------------------

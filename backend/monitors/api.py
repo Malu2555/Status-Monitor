@@ -51,6 +51,7 @@ from .schemas import (
     SslOut,
     StatsOut,
     StatusPageOut,
+    UptimeBucketOut,
 )
 from .services import (
     bulk_uptime,
@@ -58,6 +59,7 @@ from .services import (
     normalize_domain,
     record_heartbeat_ping,
     regional_statuses,
+    uptime_buckets,
     uptime_stats,
     validate_target_url,
 )
@@ -354,6 +356,18 @@ def delete_monitor(request, monitor_id: int):
 def monitor_stats(request, monitor_id: int, hours: int = 24):
     monitor = _owned_or_404(request, monitor_id)
     return uptime_stats(monitor, hours=min(max(hours, 1), 720))
+
+
+@router.get(
+    "/{monitor_id}/uptime-buckets",
+    response=list[UptimeBucketOut],
+    throttle=[MonitorAuthThrottle("120/h")],
+    url_name="monitor_uptime_buckets",
+)
+def monitor_uptime_buckets(request, monitor_id: int, hours: int = 24, bucket_hours: int = 1):
+    """Contiguous per-bucket uptime + latency series for the detail-page graph."""
+    monitor = _owned_or_404(request, monitor_id)
+    return uptime_buckets(monitor, hours=hours, bucket_hours=bucket_hours)
 
 
 # --------------------------------------------------------------------------

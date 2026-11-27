@@ -101,6 +101,13 @@ class BucketOut(Schema):
     samples: int
 
 
+class UptimeBucketOut(Schema):
+    bucket: str
+    up_ratio: float
+    response_avg_ms: int | None = None
+    samples: int
+
+
 class StatsOut(Schema):
     uptime_percent: float | None
     total_checks: int
