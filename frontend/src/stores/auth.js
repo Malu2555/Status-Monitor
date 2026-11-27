@@ -9,6 +9,7 @@ export const useAuthStore = defineStore('auth', {
     user: null, // { id, username, email, plan, plan_label, monitors_used, monitors_limit, subscription_status }
     accessToken: null, // kept ONLY in memory — never localStorage
     ready: false,
+    sessionDead: false, // true only when auth was genuinely rejected (401/403)
   }),
 
   getters: {
@@ -21,12 +22,14 @@ export const useAuthStore = defineStore('auth', {
       setAccessToken(data.access)
       this.user = data.user
       this.ready = true
+      this.sessionDead = false
     },
 
     clear() {
       this.accessToken = null
       this.user = null
       setAccessToken(null)
+      this.sessionDead = true
     },
 
     async bootstrap() {
@@ -39,10 +42,16 @@ export const useAuthStore = defineStore('auth', {
         // me() may have silently refreshed; adopt the in-memory token so
         // `isAuthenticated` stays true after a hard reload.
         this.accessToken = getAccessToken() || null
+        this.sessionDead = false
         logger.info('session restored for', data.username)
       } catch (error) {
-        if (error.status !== 401) logger.warn('session bootstrap failed', error.message)
-        this.clear()
+        // Only tear down the session on a genuine auth rejection. Transient
+        // failures (5xx, network) must not log the user out.
+        if (error.status === 401 || error.status === 403) {
+          this.clear()
+        } else {
+          logger.warn('session bootstrap failed', error.message)
+        }
       } finally {
         this.ready = true
       }

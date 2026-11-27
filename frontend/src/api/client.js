@@ -116,9 +116,13 @@ export async function apiFetch(path, { method = 'GET', body, auth = true } = {})
       headers.Authorization = `Bearer ${accessToken}`
       res = await doFetch()
     } catch (error) {
-      accessToken = null
-      logger.warn('session refresh failed — ending session')
-      if (onUnauthorized) onUnauthorized()
+      // Only end the session when auth was genuinely rejected (401). A
+      // transient 5xx/network failure must not log the user out.
+      if (error instanceof ApiError && error.status === 401) {
+        accessToken = null
+        logger.warn('session refresh rejected — ending session')
+        if (onUnauthorized) onUnauthorized()
+      }
       throw error instanceof ApiError ? error : new ApiError(401, 'Session expired')
     }
   }

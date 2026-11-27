@@ -182,7 +182,7 @@ router.afterEach((to) => {
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
   if (!auth.ready && to.meta.requiresAuth) await auth.bootstrap()
-  if (to.meta.requiresAuth && !auth.isAuthenticated) return { name: 'login' }
+  if (to.meta.requiresAuth && !auth.isAuthenticated && auth.sessionDead) return { name: 'login' }
   if ((to.name === 'login' || to.name === 'register') && auth.isAuthenticated) {
     return { name: 'dashboard' }
   }
