@@ -19,10 +19,14 @@ Released under the **MIT licence** — see `LICENSE`.
   SameSite=Strict cookie** (`path=/api/auth`), rotated on every refresh with
   reuse detection (blacklist) and a CSRF double-submit check
 - **2FA:** opt-in TOTP with single-use recovery codes, managed at `/security`
-- **Billing:** Polar.sh subscriptions (merchant of record) — Free (1 monitor,
-  5-min checks), Pro (10 monitors, 1-min), Business (50 monitors, 1-min). Paid
-  plans are marked *coming soon* in the UI until the Polar products are approved;
-  prices live in `frontend/src/utils/plans.js` and Polar.
+- **Billing:** Polar.sh subscriptions (merchant of record). Hosted tiers differ
+  by **capacity and check frequency only** — Free (1 monitor, 5-min checks, 1
+  status page, 2 alert channels, 30-day history), Pro (10 monitors, 1-min, 3
+  status pages, 10 channels, 90-day history), Business (50 monitors, 1-min,
+  unlimited status pages & channels, 365-day history). Every monitoring feature
+  (SSL/domain expiry, broken links, multi-region runners, webhook/chat alerts)
+  works on Free and in the open-source build — paid tiers never lock features.
+  Prices live in `frontend/src/utils/plans.js` and Polar.
 - **Monitoring:** `manage.py run_scheduler` (container) or `manage.py run_checks`
   (cron/Task Scheduler). It checks every monitor whose interval has elapsed and
   evaluates heartbeat monitors against their last inbound ping. The container

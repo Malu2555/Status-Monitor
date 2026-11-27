@@ -16,6 +16,7 @@ from pydantic import Field
 
 from accounts.auth import AuthBearer
 from audit.services import audit_log
+from billing.services import can_add_channel
 from config.throttling import MonitorAuthThrottle
 from core.net import validate_target_url
 from monitors.models import Monitor
@@ -144,6 +145,9 @@ def list_channels(request):
 )
 def create_channel(request, payload: ChannelIn):
     monitor = _owned_monitor(request, payload.monitor_id)
+    ok, reason = can_add_channel(request.auth)
+    if not ok:
+        raise HttpError(400, reason)
     address = _validate_address(payload.kind, payload.address, request.auth)
     if MonitorNotificationChannel.objects.filter(monitor=monitor, kind=payload.kind, address=address).exists():
         raise HttpError(400, "That channel already exists for this monitor.")

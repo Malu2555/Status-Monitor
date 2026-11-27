@@ -10,6 +10,7 @@ from ninja.errors import HttpError
 
 from accounts.auth import ApiKeyAuth, AuthBearer
 from audit.services import audit_log
+from billing.services import can_add_status_page
 from config.throttling import MonitorAuthThrottle
 
 from .models import Monitor, StatusPage
@@ -67,6 +68,9 @@ def list_status_pages(request):
 )
 def create_status_page(request, payload: StatusPageIn):
     _require_write(request)
+    ok, reason = can_add_status_page(request.auth)
+    if not ok:
+        raise HttpError(400, reason)
     if StatusPage.objects.filter(slug=payload.slug).exists():
         raise HttpError(400, "That slug is already taken.")
     page = StatusPage.objects.create(

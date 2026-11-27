@@ -31,17 +31,31 @@ if TYPE_CHECKING:  # import-time only (avoids a circular import with accounts)
 logger = logging.getLogger("billing")
 
 PLANS = {
-    "free": {"label": "Free", "monitors": 1, "min_interval": 300, "product_id": ""},
+    "free": {
+        "label": "Free",
+        "monitors": 1,
+        "min_interval": 300,
+        "status_pages": 1,
+        "channels": 2,
+        "history_days": 30,
+        "product_id": "",
+    },
     "pro": {
         "label": "Pro",
         "monitors": 10,
         "min_interval": 60,
+        "status_pages": 3,
+        "channels": 10,
+        "history_days": 90,
         "product_id": settings.POLAR_PRODUCT_IDS.get("pro", ""),
     },
     "business": {
         "label": "Business",
         "monitors": 50,
         "min_interval": 60,
+        "status_pages": None,  # unlimited
+        "channels": None,  # unlimited
+        "history_days": 365,
         "product_id": settings.POLAR_PRODUCT_IDS.get("business", ""),
     },
 }
@@ -102,11 +116,43 @@ def min_interval(user) -> int:
     return PLANS[get_plan_name(user)]["min_interval"]
 
 
+def status_pages_limit(user) -> int | None:
+    return PLANS[get_plan_name(user)]["status_pages"]
+
+
+def channels_limit(user) -> int | None:
+    return PLANS[get_plan_name(user)]["channels"]
+
+
+def history_days(user) -> int:
+    return PLANS[get_plan_name(user)]["history_days"]
+
+
 def can_add_monitor(user) -> tuple[bool, str]:
     count = user.monitors.count()
     limit = monitors_limit(user)
     if count >= limit:
         return False, f"Plan limit reached ({count}/{limit} monitors). Upgrade to add more."
+    return True, ""
+
+
+def can_add_status_page(user) -> tuple[bool, str]:
+    limit = status_pages_limit(user)
+    if limit is None:
+        return True, ""
+    count = user.status_pages.count()
+    if count >= limit:
+        return False, f"Plan limit reached ({count}/{limit} status pages). Upgrade to add more."
+    return True, ""
+
+
+def can_add_channel(user) -> tuple[bool, str]:
+    limit = channels_limit(user)
+    if limit is None:
+        return True, ""
+    count = user.notification_channels.count()
+    if count >= limit:
+        return False, f"Plan limit reached ({count}/{limit} notification channels). Upgrade to add more."
     return True, ""
 
 
@@ -118,6 +164,9 @@ def get_plan_summary(user) -> dict:
         "label": PLANS[plan]["label"],
         "monitors_used": user.monitors.count(),
         "monitors_limit": monitors_limit(user),
+        "status_pages_limit": status_pages_limit(user),
+        "channels_limit": channels_limit(user),
+        "history_days": history_days(user),
         "subscription_status": subscription.status if subscription else "active",
         "current_period_end": (
             subscription.current_period_end.isoformat()

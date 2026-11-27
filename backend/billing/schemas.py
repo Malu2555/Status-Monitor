@@ -15,5 +15,8 @@ class BillingSummaryOut(Schema):
     label: str
     monitors_used: int
     monitors_limit: int
+    status_pages_limit: int | None = None
+    channels_limit: int | None = None
+    history_days: int | None = None
     subscription_status: str
     current_period_end: str | None = None
